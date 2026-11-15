@@ -1,0 +1,29 @@
+# Allow only the files needed by the image build.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!canopy/
+!canopy/**
+# Exclude these even if they appear inside the application directory.
+**/__pycache__/
+**/*.py[cod]
+**/.git/
+**/.venv*/
+**/venv/
+**/.env
+**/.env.*
+**/.aws/
+**/.ssh/
+**/credentials
+**/*.pem
+**/*.key
+**/.terraform/
+**/*.tfstate*
+**/*.tfplan
+**/terraform.tfvars
+**/*.auto.tfvars*
+**/*.db*
+**/*.log
+**/dist/
+**/build/

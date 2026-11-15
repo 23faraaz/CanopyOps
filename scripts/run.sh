@@ -7,8 +7,8 @@ cd "$project_dir"
 usage() {
   printf '%s\n' \
     'Usage: bash scripts/run.sh [start|stop|logs|status|seed]' \
-    '  start   Build and start the API; wait for health (default)' \
-    '  stop    Stop the API; keep the SQLite volume' \
+    '  start   Build and start the local stack; wait for health (default)' \
+    '  stop    Stop the stack; keep all named volumes' \
     '  logs    Follow API logs; Ctrl+C stops following only' \
     '  status  Show service and health status' \
     '  seed    Generate two batches of local demo readings'
@@ -31,13 +31,13 @@ docker info >/dev/null
 
 case "$command" in
   start)
-    docker compose up -d --build --wait --wait-timeout 90 api
+    docker compose up -d --build --wait --wait-timeout 180
     printf '%s\n' "API ready: http://127.0.0.1:${API_PORT:-8000}" \
-      'Add demo readings: bash scripts/run.sh seed' \
+      "Grafana viewer: http://127.0.0.1:${GRAFANA_PORT:-3000}" \
       'View logs: bash scripts/run.sh logs'
     ;;
-  stop) docker compose stop api ;;
+  stop) docker compose stop ;;
   logs) docker compose logs --follow --tail 100 api ;;
-  status) docker compose ps --all api ;;
+  status) docker compose ps --all ;;
   seed) docker compose exec -T api python -m canopy.simulator --cycles 2 --interval 1 ;;
 esac

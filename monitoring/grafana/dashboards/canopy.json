@@ -1,0 +1,343 @@
+{
+  "uid": "canopy-local",
+  "title": "CanopyOps ? Local monitoring",
+  "description": "Synthetic woodland station data. API metrics are not proof of worker health. Processing pipeline and cloud deployment remain outside this local milestone.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "5s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "tags": [
+    "canopyops",
+    "local",
+    "synthetic"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "API scrape available",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"canopy-api\"}",
+          "legendFormat": "{{station_id}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 2,
+      "title": "SQLite readable",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "canopy_storage_available{job=\"canopy-api\"}",
+          "legendFormat": "{{station_id}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Reporting stations (<120s)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count((time() - canopy_station_observed_timestamp_seconds{job=\"canopy-api\"}) < 120) or vector(0)",
+          "legendFormat": "{{station_id}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Active environmental incidents (including stale stations)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(canopy_station_active_incidents{job=\"canopy-api\"}) or vector(0)",
+          "legendFormat": "{{station_id}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 5,
+      "title": "API heartbeat age",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_min(time() - canopy_heartbeat_timestamp_seconds{job=\"canopy-api\",service=\"api\"}, 0)",
+          "legendFormat": "{{station_id}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Temperature by station",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "canopy_station_temperature_celsius{job=\"canopy-api\"}",
+          "legendFormat": "{{station_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "Soil moisture by station",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "canopy_station_soil_moisture_percent{job=\"canopy-api\"}",
+          "legendFormat": "{{station_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Reading age (stale after 120s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "clamp_min(time() - canopy_station_observed_timestamp_seconds{job=\"canopy-api\"}, 0)",
+          "legendFormat": "{{station_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "Humidity by station",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "canopy-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "canopy_station_humidity_percent{job=\"canopy-api\"}",
+          "legendFormat": "{{station_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {}
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  }
+}

@@ -2,7 +2,8 @@ import argparse
 import math
 import os
 import random
-import time
+import signal
+import threading
 import uuid
 from datetime import datetime, timezone
 from canopy.domain import Reading, STATIONS
@@ -24,9 +25,14 @@ def main():
         queue = boto3.client('sqs')
     else:
         repository = store()
+    stopped = threading.Event()
+    def stop(*_):
+        stopped.set()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     cycle = 0
     try:
-        while not args.cycles or cycle < args.cycles:
+        while not stopped.is_set() and (not args.cycles or cycle < args.cycles):
             for index, station in enumerate(STATIONS):
                 wave = math.sin(cycle / 5 + index)
                 reading = Reading(event_id=str(uuid.uuid4()), station_id=station, observed_at=datetime.now(timezone.utc),
@@ -40,7 +46,7 @@ def main():
             cycle += 1
             print(f'Cycle {cycle}: sent {len(STATIONS)} synthetic readings', flush=True)
             if not args.cycles or cycle < args.cycles:
-                time.sleep(args.interval)
+                stopped.wait(args.interval)
     except KeyboardInterrupt:
         pass
 

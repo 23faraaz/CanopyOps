@@ -55,7 +55,7 @@ def main():
             return dc('exec','-T','api','python','-c',code)
         try:
             print('Checking isolated Compose service...', flush=True)
-            dc('up','-d','--no-build','--wait','--wait-timeout','90')
+            dc('up','-d','--no-build','--wait','--wait-timeout','90','api')
             execute("import os,importlib.util; assert os.getuid()==10001; assert importlib.util.find_spec('boto3') is None; assert importlib.util.find_spec('botocore') is None; assert not os.access('/app/canopy/api.py',os.W_OK); assert os.access('/data',os.W_OK)")
             execute("import urllib.request; paths=['/','/static/app.js','/static/style.css','/health/live','/health/ready']; assert all(urllib.request.urlopen('http://127.0.0.1:8000'+p).status==200 for p in paths)")
             dc('exec','-T','api','python','-m','canopy.simulator','--cycles','2','--interval','0.1')

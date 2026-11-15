@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+.env
+
+.venv-wsl/
+.test-temp*/
+.env.*
+.aws/
+.ssh/
+*.pem
+*.key
+.terraform/
+*.tfstate*
+*.tfplan
+terraform.tfvars
+*.auto.tfvars*
+
+# Local notes and generated reports; do not publish.
+/APPLICATION_GAPS.md
+/DOCKER_VERIFICATION.json
+/DOCKER_SCAN.md
+/README.md

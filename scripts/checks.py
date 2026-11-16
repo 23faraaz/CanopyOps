@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 import subprocess
 import sys
@@ -101,6 +102,10 @@ def scan_checks():
     with tempfile.TemporaryDirectory(prefix="canopy-image-scan-") as directory:
         archive = Path(directory) / "image.tar"
         run("docker", "save", "-o", str(archive), "canopyops:local")
+        # On Linux, match the host owner so TemporaryDirectory can remove all output.
+        # Docker Desktop Windows bind mounts use Windows ACLs instead of POSIX ownership.
+        identity = ["--user", f"{os.getuid()}:{os.getgid()}"] if os.name == "posix" else []
+        (Path(directory) / "cache").mkdir(mode=0o700)
         # Archive-only scan, no Docker socket or host secret mount, no image upload.
         scan = run(
             "docker",
@@ -108,6 +113,9 @@ def scan_checks():
             "--rm",
             "--mount",
             f"type=bind,source={directory},target=/scan",
+            *identity,
+            "--env",
+            "HOME=/tmp",
             TRIVY,
             "image",
             "--input",

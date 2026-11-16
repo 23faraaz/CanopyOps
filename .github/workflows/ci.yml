@@ -25,3 +25,13 @@ jobs:
         run: python3 scripts/checks.py --only container
       - name: Strict HIGH and CRITICAL vulnerability gate
         run: python3 scripts/checks.py --only scan
+      - name: Verify scan workspace cleanup
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import tempfile
+          from pathlib import Path
+          remaining = list(Path(tempfile.gettempdir()).glob("canopy-image-scan-*"))
+          assert not remaining, "Scan temporary directories remain"
+          print("Scan workspace cleanup verified")
+          PY

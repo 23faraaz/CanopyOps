@@ -140,6 +140,82 @@ The first Docker script explicitly tests SQLite in an isolated project, ignoring
 
 The existing four-service monitoring verifier exercises the SQLite baseline; the PostgreSQL API/storage metric was checked separately after cutover. A healthy website/stopped-processing and missing-metrics failure exercise remains to be implemented. Vulnerability scanning, CI and production resilience have not been claimed as completed.
 
+## Recovery contract: next-phase stage 1
+
+Defined on 16 November 2026 against `b5baee3`. This section specifies acceptance criteria, not successful interruption, rollback or AWS test results. No application behavior, database permissions or live service state was changed to create it.
+
+### Evidence baseline and authority
+
+| Claim | Status to preserve |
+| --- | --- |
+| SQLite to local PostgreSQL | Completed and validated: 4,500 source events/four states at cutover |
+| Earlier cutover timing | Conservative 28.14-second bound; never label as an exact measured duration |
+| Reverse export with PostgreSQL writes | Rehearsed |
+| Complete rollback activation | Untested, including isolated-clone activation |
+| AWS deployment | Not implemented |
+| RDS Multi-AZ failover | Not tested |
+
+The current PostgreSQL database, including subsequent accepted writes, is authoritative. The retained original SQLite database is historical. Do not overwrite either baseline to execute a drill. Initial interruption and rollback tests must use separately named disposable projects/volumes populated from a consistent copy of current PostgreSQL data. Do not regenerate readings to stand in for that dataset. Record and verify that the live environment was not modified.
+
+### Recovery objectives and clocks
+
+These are targets for the upcoming controlled local drills, not achieved service guarantees. Carry forward the agreed five-minute budget; do not generalize it into a production SLA.
+
+| Objective | Acceptance definition |
+| --- | --- |
+| Acknowledged-write RPO | Zero missing or altered events whose successful durable processing was acknowledged; verify IDs and payloads, not just counts |
+| Uncertain outcomes | Zero unresolved submissions at completion; reconcile each against durable state, retrying only the identical event ID/content when appropriate |
+| Planned write pause | Goal <=300 seconds from pause request through first confirmed durable write on the selected backend; includes stopping/draining writers and validation |
+| Interruption recovery | Goal <=300 seconds from first detected failed operation through both API readiness and confirmed processing progress; include injected fault duration and all operator intervention |
+| API recovery | Record first failed readiness probe and subsequent successful readiness probe separately; a successful liveness check is insufficient |
+| Processing recovery | Record first acknowledged new event and database read-back after the fault; neither a running process nor a healthy website proves progress |
+| Freshness | Record latest observed_at and its age; the current application marks readings stale after 120 seconds. This is distinct from commit/acknowledgement time |
+
+Use a persisted monotonic timeline for durations and UTC timestamps for correlation. Record fault injection, detection, fault removal, API readiness, writer restart, durable write confirmation and validation completion. Report probe intervals, process/host identity and any clock assumptions. If timing evidence is lost, mark the duration unavailable or report a justified bound; do not reconstruct an exact stopwatch result from observation timestamps.
+
+The generator currently exits on a database exception. The first drill must record that behavior. Manual restart and automatic recovery are different outcomes: identify every operator action, include its delay, and never label operator-assisted recovery as automatic. A narrow retry/reconnection change requires its own explanation and tests; do not silently add a queue or change application event semantics.
+
+### Per-event evidence ledger
+
+Stage 2 will implement the ledger; it does not exist yet. Write an append-only, flushed durable record before attempting a test event, retaining the complete original reading locally so retries cannot invent a new ID, timestamp or measurement. Each record will include run_id, event_id, station_id, canonical payload SHA-256, attempt number, UTC/monotonic times, transition and any sanitized error classification.
+
+Transitions must distinguish `created`, `attempted`, `acknowledged_insert`, `acknowledged_duplicate`, `uncertain`, and `verified_present`/`verified_absent`. A disconnect after submission is uncertain, not proof that a transaction failed. An acknowledgement follows transaction completion; a duplicate acknowledgement is valid only when stored content matches the attempted content. Flag conflicting content in the verifier even though the existing application currently ignores duplicate-ID content differences.
+
+At the end, reconcile every attempted ID against database content. Every acknowledged ID must be present once with matching content. All uncertain attempts must be resolved. Created-but-unsubmitted events are not acknowledged writes; report them separately. Identical measurements at different observation times remain valid distinct events. Preserve the actual source events, state payloads, incidents and relationships with the existing whole-dataset manifests while all writers are paused.
+
+Record run scope, Git commit, image ID/digest, schema migration versions/checksums, backend identities, commands, exit codes, before/after manifests, probe results, operator actions and pass/fail/inconclusive status. Never include credentials or connection strings containing passwords. Keep raw data and ledgers under ignored backups; commit only sanitized evidence summaries in the README. No test passes solely because its command exited zero.
+
+### Writer inventory and controls
+
+Read-only inspection at 10:47:16 UTC on 16 November 2026 confirmed the three application roles are non-superusers without database/role creation. The reader has event SELECT but not event INSERT or state UPDATE; writer and migrator have the latter privileges. The bootstrap postgres role is a superuser. The session query saw the inspection's migrator session only; this is a transient observation, not a pause test.
+
+| Writer path or identity | Required treatment during a drill |
+| --- | --- |
+| Local generator / canopy_writer | Stop managed process; prevent new connections; account for in-flight transactions and verify database quiescence |
+| Future worker / canopy_writer | Not running locally; include it before any future queued-processing test |
+| Migration tools / canopy_migrator | Can write despite being outside the generator service; allow only the identified controller and planned transfer operations |
+| Bootstrap administrator / postgres | Can bypass runtime grants; exclude concurrent administration and record the controller's privileged actions |
+| Manual docker exec, SQL clients and extra containers | Inventory explicitly; an unknown writer/session fails preflight |
+| API / canopy_reader | Read-only on PostgreSQL; stop for backend activation as needed. SQLite mode can issue schema initialization, so it is not treated as a harmless reader during SQLite transfer |
+
+Existing implementation: `freeze()` stops the named Compose generator/API and checks for running containers holding the SQLite volume. It does NOT implement a PostgreSQL connection fence, account for all privileged writers, or prove that in-flight PostgreSQL transactions are drained. Those are open implementation requirements, not completed controls.
+
+The forthcoming clone-only controller must capture original role/connectivity settings, prevent new runtime writer connections, drain or terminate identified clone writer sessions, verify no writable in-flight work remains, and test that a fresh writer cannot write while fenced. Stopping containers or seeing zero sessions once is insufficient. Do not change the migration owner's ability to perform the planned transfer, and do not apply a blanket fence to the live environment.
+
+Use this order: preflight inventory -> checkpoint -> fence/drain -> consistent source snapshot -> transfer -> full manifest validation -> backend activation with writers still fenced -> readiness and application verification -> enable only the selected backend's writer -> verify new acknowledged write. Never run source and target writers together. If any gate fails, preserve both datasets and checkpoints, keep writers paused, and report the failed gate; do not automatically restore an old database or blindly resume.
+
+For rollback, export all CURRENT PostgreSQL events/states, including writes accepted after the old SQLite backup. Validate a new SQLite file, activate it in the isolated clone, and verify states, incidents, history, duplicate handling and the deliberately added PostgreSQL event IDs before enabling SQLite writes. Then verify a new SQLite write. If PostgreSQL cannot be read, zero-loss reverse transfer cannot be promised; recover PostgreSQL first. A successful clone activation must be labeled as such and does not establish live-environment rollback activation.
+
+### Stage gates
+
+1. Define evidence, recovery objectives and writer controls: this contract, grounded by repository inspection and a read-only permission/session check.
+2. Test local database interruption and uncertain writes: implement the durable event ledger and clone-only writer controls; capture actual failure/recovery behavior before deciding on retries.
+3. Test complete rollback activation in an isolated clone: exercise the full switch and verify PostgreSQL-created writes survive. Preserve the live PostgreSQL environment.
+4. Add repeatable syntax, lint, test and container checks: run each check successfully before claiming it exists; keep development tools outside runtime images.
+5. Specify RDS restore, TLS and role handling: exact compatible dump/restore commands, ownership/grants, private connectivity, runtime secrets and certificate/hostname verification. No cloud apply in this stage.
+
+Each verified stage gets a focused commit and push before the next begins. A missed objective, missing ledger outcome or incomplete fence is reported as failure/inconclusive, not converted into a portfolio success claim. No new AWS resources, Multi-AZ test, CI/CD or full rollback success is implied by this contract.
+
 ## Remaining scope
 
 - Greenhouse naming/site count, sequence-number scope and restart behavior, and conflicting content for one event ID still require application decisions. Duplicate IDs retain the existing ignore behavior.

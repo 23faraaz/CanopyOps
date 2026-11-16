@@ -571,3 +571,38 @@ Safe counts, status, command/exit-code timestamps and limitations are under igno
 These probes are discrete observations, not a continuous-availability measurement. No alert rules, Alertmanager route or notification delivery were implemented or tested; query/dashboard visibility is the evidence here. Stopped processing required an explicit operator restart, so this is not automatic recovery or high availability. Environmental incident state is not recreated merely because data became stale. Before AWS, remaining preparation includes tested alert delivery, a backup restoration into a separate database, and a costed private-RDS/TLS/IAM/secrets/teardown design. Those remain separate stages; this work creates no AWS resources.
 
 Branch protection stage merged via [PR #1](https://github.com/23faraaz/CanopyOps/pull/1), main commit `375d76f`; deadline tracking merged via [PR #2](https://github.com/23faraaz/CanopyOps/pull/2), main commit `a772463`. Both passed the required `checks` job. The manually dispatched default-branch deadline/vendor review also [passed](https://github.com/23faraaz/CanopyOps/actions/runs/43891150031). Daily scheduling itself has not yet reached its first scheduled execution; it should not be described as an already observed cron run.
+
+## Consistent PostgreSQL backup and separate-database restore
+
+Verified on 16 November 2026 with `python3 scripts/verify_postgres_restore.py`, run `018958ac7b464f28b1d6f8d37993caca`. This uses the **actual current PostgreSQL application dataset**, not regenerated readings. Source transactions are read-only; the original generator/API are not stopped. No original PostgreSQL or SQLite volume is mounted into test tools.
+
+A short-lived source connection holds a repeatable-read, read-only exported snapshot. The source manifest and PostgreSQL 17.12 `pg_dump --format=custom --schema=canopy --snapshot=...` use that same snapshot. The dump is restored by PostgreSQL 17.12 `pg_restore --single-transaction --exit-on-error --no-owner` into a **new database**, `canopy_restore_018958ac7b46`, on a uniquely named separate PostgreSQL server volume. Original source and target database names/endpoints cannot be interchanged silently: target operations require unique project/volume/network labels plus a random database guard outside the restored schema. Existing target database names are refused; no source cleanup or database overwrite is issued.
+
+| Verification | Actual result |
+| --- | --- |
+| Captured/restored data | **19,784 events, 19,784 unique event IDs, four states and four stations** |
+| Data integrity | Exact row/state hash `9602a95952ef6a228b2d027735101ec61a1a45aa74a1980386c923911c67c940`; native timestamps, latest states, incident references and station coverage validated |
+| Schema/permissions | Constraint, index, owner and grant metadata hash matched; migration version/checksum/applied timestamp hash matched; schema owner canopy_migrator; migration rerun was a no-op |
+| Application behavior | Existing event replay left data unchanged; five forbidden reader/writer actions were denied with SQLSTATE 42501; one new target event succeeded and its duplicate was ignored |
+| Restored API | Dashboard/static assets, both health endpoints, four station views and private metrics passed against the restored database |
+| Source preservation | Source advanced to **19,824 events**; the new restore-only event was absent there; original container IDs and volume bindings were unchanged |
+| Archive | **1,087,376 bytes**, SHA-256 `22d7e0782f4f3d02de58d9930f853a007beb191f2017c276b6e656a4d687f49c`; unchanged after restore |
+| Command timing | Dump command **2.719 s**; restore command **1.988 s**, including client/container overhead; not full recovery-time measurements |
+| Cleanup | Only test containers, separate target volume and test-image tag removed; source external network preserved and the local backup retained |
+
+The tool connection was interrupted after the rehearsal had progressed. Its saved summary/command exit codes were recovered and validated as passed, including completed cleanup; the backup was not overwritten or blindly rerun. The interrupted session's total wall time is not an RTO/outage measurement. The live source kept its normal writes; this was not a cutover. A restored backup includes its captured snapshot, not later source writes. Source-to-backup write gaps therefore remain a real recovery-point consideration.
+
+The archive covers the application `canopy` schema, including migration history, owners' intended role names/grants and all current application data. Cluster roles/passwords, other databases, tablespaces, physical/WAL backups, PITR and RDS snapshots are **not** included or tested. Required roles are independently bootstrapped on the isolated server from existing runtime secret mounts, then schema objects are restored under the migration owner. Dump files are compressed logical data, not encrypted backups. Disk encryption remains unverified as documented earlier; protect/archive/prune real backups deliberately before cloud or sensitive-data use.
+
+`scripts/pg_client.sh` builds a mode-0600 pgpass file only on container tmpfs; it escapes delimiters, rejects missing/empty password files, never prints password values and does not export PGPASSWORD. Existing host password files are neither changed nor read by the controller. Four fixture-only tests cover mode/escaping, no password environment variable, and missing/empty-file failure. After the wrapper checks were tightened, a read-only source authentication smoke check returned canopy_migrator with default_transaction_read_only=on. It did not dump or modify records again.
+
+```bash
+# Requires the current local PostgreSQL stack and external runtime password files.
+python3 scripts/verify_postgres_restore.py
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+```
+
+All **41 Python tests** passed, including the four native-client fixture tests; syntax/Ruff, Hadolint, both workflows' actionlint and quiet Compose validation passed. One existing deprecation warning remains. Safe evidence is in ignored `backups/postgres-restore-018958ac7b464f28b1d6f8d37993caca/summary.json` and `commands.json`. The raw `canopy.dump` stays ignored/local and is never printed or committed. This stage changes no application module, runtime lock, Dockerfile, bound Compose configuration or SQLite acceptance. No AWS resources or live rollback activation are implied.
+
+The consistency and archive choices follow the [PostgreSQL pg_dump documentation](https://www.postgresql.org/docs/17/app-pgdump.html); restoration uses the documented [pg_restore behavior](https://www.postgresql.org/docs/17/app-pgrestore.html).

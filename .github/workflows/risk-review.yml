@@ -1,0 +1,33 @@
+name: SQLite risk review
+on:
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - security/sqlite-risk-acceptance.json
+      - scripts/review_deadline.py
+      - scripts/image_policy.py
+      - .github/workflows/risk-review.yml
+  push:
+    branches: [main]
+    paths:
+      - security/sqlite-risk-acceptance.json
+      - scripts/review_deadline.py
+      - scripts/image_policy.py
+      - .github/workflows/risk-review.yml
+permissions:
+  contents: read
+concurrency:
+  group: risk-review-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  risk-deadline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check UTC expiry and available vendor packages
+        run: python3 scripts/review_deadline.py --probe-vendor

@@ -11,6 +11,12 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - An SQS worker's storage selection now requires PostgreSQL. Its cloud queue integration is not deployed or end-to-end verified. Boto3 remains outside the local runtime dependencies and must be included in a future worker-specific build before using SQS.
 - Local and GitHub Actions CI checks are described below. No AWS resources or deployment/CD workflow exist. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
 
+## Supported Python runtime
+
+CanopyOps supports **Python 3.12 only**, currently verified as **3.12.16** in the digest-pinned Dockerfile image. Other minor versions are not promised or tested; there is no Python-version matrix. Host Python launches the check controller and is not evidence of application compatibility. `scripts/verify_docker.py` reads the pinned image reference directly from the Dockerfile; CI installs the hash-locked dependencies and runs syntax, Ruff, `pip check` and pytest in that exact image. Container verification compares the built runtime's full Python version with the test image and records both. The shared Debian security-update stage preserves that interpreter version.
+
+When updating the base digest or dependencies, rerun the same checks before claiming support for the resulting interpreter. Testing on this local container image does not establish an AWS deployment result. Adding another supported minor version later requires maintained locks/tests and an explicit README support promise before adding a matrix.
+
 ## Run
 
 In WSL, from the project checkout:
@@ -375,3 +381,12 @@ The first three phases passed locally; scan failed with the findings above. See 
 Final repeatability run after making the source marker unique: **30.00 s layer-cold / 2.16 s cached / 2.19 s source-only**, image **57,682,512 bytes**. All container checks passed again, including an explicitly rebuilt source COPY and cached dependency installation. The previous fixed comment had allowed reuse of a prior test's source layer; the stronger assertion caught it, and the unique marker corrects that test-fixture problem. Build timings vary with local/network load; neither run is a cold-download benchmark. The security scan applies to the same runtime sources/dependencies/OS package versions, independently of image metadata differences between builds.
 
 External directory placement and ACLs reduce accidental source/build inclusion; they do not isolate passwords from every process running as the same Windows account. No password files or optional environment-file contents were read during this work.
+
+
+## Secret storage and encryption boundaries
+
+Local PostgreSQL continues to use the four external password files with restricted Windows ACLs, mounted only into the services granted each Compose secret. Passwords are not ordinary environment variables, `.env` entries, build arguments or image contents. Nonsecret connection settings and file paths can remain in Compose. File-based [Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/) are bind mounts: naming something a secret does not encrypt its host file. Host disk encryption and encrypted private backups must be verified separately. The BitLocker status query was denied by Windows on this machine, so encryption at rest is **unverified**; no encryption settings, keys or passwords were changed. An administrator can check drive protection through Windows BitLocker settings without displaying recovery keys in project logs/chat.
+
+Current CI needs no database passwords or API keys and receives no local secret files. If a later workflow genuinely needs a sensitive value, use [GitHub Actions Secrets](https://docs.github.com/en/actions/concepts/security/secrets), with environment protection and scoped access where appropriate. GitHub encrypts submitted secrets and decrypts them for authorized runtime use; runtime access still needs careful workflow review. Ordinary GitHub configuration variables (`vars`) and environment variables are not encrypted secret stores and may appear unmasked in output. Keep nonsecret settings in variables and credentials in Secrets; never print or dump either a credential environment or a secret file. Future AWS access will use scoped OIDC instead of stored AWS access keys; AWS runtime-secret integration remains unimplemented.
+
+Python-policy verification (16 November 2026): test interpreter and built runtime both reported **3.12.16**; hash-locked dependency installation, `pip check`, syntax, Ruff lint/format and all **14 tests** passed (the existing Starlette/httpx deprecation warning remains). Isolated dashboard, health, private metrics, persistence, non-root, artifact exclusions, shutdown and dependency-cache checks also passed. External directory/four-file ACL metadata was rechecked: inheritance disabled, only the current account and SYSTEM allowed. No secret contents were accessed. The existing vulnerability-gate and branch-protection limitations above remain separate from these passing compatibility checks.

@@ -10,7 +10,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = "canopyops:local"
-BASE = "python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+
+
+def python_image():
+    match = re.search(r"^ARG PYTHON_IMAGE=(\S+)$", (ROOT / "Dockerfile").read_text(), re.MULTILINE)
+    if not match or not re.fullmatch(r"python:[^\s@]+@sha256:[0-9a-f]{64}", match.group(1)):
+        raise RuntimeError("Dockerfile must declare a digest-pinned PYTHON_IMAGE")
+    return match.group(1)
+
+
+BASE = python_image()
 
 
 def run(*args):
@@ -64,6 +73,16 @@ def main():
     report["image_bytes"] = int(
         run("docker", "image", "inspect", IMAGE, "--format", "{{.Size}}").strip()
     )
+    version_command = ["python", "-c", "import platform; print(platform.python_version())"]
+    expected_python = run(
+        "docker", "run", "--rm", "--network", "none", BASE, *version_command
+    ).strip()
+    runtime_python = run(
+        "docker", "run", "--rm", "--network", "none", IMAGE, *version_command
+    ).strip()
+    assert runtime_python == expected_python, (runtime_python, expected_python)
+    report["runtime_python"] = runtime_python
+    report["test_python_image"] = BASE
     project = "canopycheck" + uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory(prefix="canopy-compose-") as directory:
         override = Path(directory) / "override.yaml"

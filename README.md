@@ -493,7 +493,7 @@ Before explicit owner acceptance: the actual patched-image scan recorded Trivy e
 
 Final patched candidate container verification passed: **33,199,616 bytes**, compared with the recorded Debian image's 57,682,512 bytes (about **42% smaller by Docker-reported image size**, not a cloud cost or transfer-saving claim). Layer-cold/cached/source-only builds took **14.75 / 1.46 / 1.44 seconds** on this laptop; base/download caches may be warm. Dependency installation stayed cached and the changed source COPY rebuilt. Non-root, read-only application/root filesystem, isolated writable SQLite volume, dashboard assets, both health endpoints, private metrics, persistence after replacement and graceful shutdown exit 0 passed. Runtime Python remained 3.12.16. No runtime lock changed.
 
-The acceptance deadline is checked on every invocation of the advisory gate. Current CI triggers remain pull requests and pushes to main; expiry does not create a scheduled run or terminate an already running application. The owner subsequently activated only the three scoped local exceptions, as recorded below.
+The acceptance deadline is checked on every invocation of the advisory gate. Main CI triggers remain pull requests and pushes to main; the separate daily SQLite risk-review workflow described below now tracks expiry. An expired acceptance does not terminate an already running application. The owner subsequently activated only the three scoped local exceptions, as recorded below.
 
 
 Final-image PostgreSQL/SQLite compatibility was rechecked after the Kerberos patch: isolated run `2131f4cd7b2b4cdcaa98223488af7425` passed with 16,888 exported events/four states, duplicate and incident checks, SQLite activation before writer resume, a new SQLite write and generator progress. Observed drill interval **21.671 seconds**; no live downtime measurement. Original containers/volume bindings stayed unchanged and isolated resources were removed. The actual image's policy scope matches the inactive proposal; a temporary in-memory test approval accepted the three CVEs while the on-disk proposal remained unapproved. The default gate continues to block them.
@@ -519,3 +519,20 @@ Subsequent stages use feature branches and PRs, wait for the required `checks` r
 gh api repos/23faraaz/CanopyOps/branches/main/protection \
   --jq '{checks: .required_status_checks.checks, strict: .required_status_checks.strict, admins: .enforce_admins.enabled, pr: .required_pull_request_reviews.required_approving_review_count}'
 ```
+
+
+## SQLite deadline tracking
+
+The local-only SQLite acceptance still expires **23 November 2026 at 00:00 UTC (London time on that date)**. No approval, scope hash or deadline was changed by this stage. `scripts/review_deadline.py` checks UTC dates and supports a lightweight public vendor-package probe. It warns when 72 hours or less remain and fails on/after expiry. The full CI image gate independently enforces both scope and expiry; the lightweight job does not replace that check.
+
+`.github/workflows/risk-review.yml` runs daily at **08:23 UTC**, on relevant PR/main changes, and through manual dispatch. It uses read-only repository permissions, the pinned checkout action without persisted credentials, a five-minute timeout and concurrency cancellation. It needs no database files, passwords, API keys or AWS access. Scheduled GitHub runs can be delayed and depend on default-branch workflow availability, so this is monitoring rather than a guarantee of an exact-time notification. Failed-run notifications depend on the owner's GitHub notification settings. The existing image gate rejects expired acceptance on every invocation, including before the next daily run.
+
+The vendor probe queries the stable Alpine repositories configured in the pinned Python base, compares available SQLite packages using APK's version comparator, and reports newer candidates for human advisory review/testing. A newer version is not automatically declared fixed, installed or accepted. On 16 November the probe completed and reported only `3.53.4-r0`, no newer candidate, with advisory closure explicitly unverified. The three known SQLite risks therefore remain accepted only within their existing local scope and expiry.
+
+```bash
+python3 scripts/review_deadline.py --probe-vendor
+# After merging the workflow onto main:
+gh workflow run risk-review.yml --repo 23faraaz/CanopyOps --ref main
+```
+
+Validation: **37 pytest tests passed**, including seven deadline cases covering the 72-hour boundary, exact UTC expiry, post-expiry failure status, unchanged policy and absent approval. Syntax, Ruff lint/format, Hadolint, both workflow files' actionlint and quiet Compose validation passed. The existing deprecation warning remains. This stage changes no runtime image, application code, dependency lock or bound Compose configuration and does not invalidate or renew the existing acceptance. PR #1 established administrator-enforced PR/required-check protection before this workflow stage.

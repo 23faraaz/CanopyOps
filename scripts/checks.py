@@ -59,16 +59,17 @@ def configuration_checks():
         "hadolint",
         "/Dockerfile",
     )
-    run(
-        "docker",
-        "run",
-        "--rm",
-        "--mount",
-        f"type=bind,source={ROOT / '.github/workflows/ci.yml'},target=/ci.yml,readonly",
-        ACTIONLINT,
-        "-color",
-        "/ci.yml",
-    )
+    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        run(
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            f"type=bind,source={workflow},target=/workflow.yml,readonly",
+            ACTIONLINT,
+            "-color",
+            "/workflow.yml",
+        )
     run("docker", "compose", "-f", str(ROOT / "compose.yaml"), "config", "--quiet")
     run(
         "docker",

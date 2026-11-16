@@ -291,3 +291,27 @@ Stage 3 remains the complete rollback activation drill in an isolated clone, inc
 - Revalidate monitoring and processing-progress failure tests on PostgreSQL before CI/cloud work.
 - Future stages: CI, one Terraform-managed AWS environment with private RDS PostgreSQL and scoped IAM/secrets, then a rehearsed simulated local-to-AWS dump/restore migration. This completed stage is SQLite-to-local-PostgreSQL, not an AWS migration.
 - Keep one environment. Multi-AZ and extra tasks are for justified time-boxed experiments later; there is no Multi-AZ environment to destroy now.
+
+## Complete rollback activation: isolated clone
+
+Verified 16 November 2026 with `python scripts/verify_rollback.py` (run `0732c6d6d37147498270d729eeb478af`). This completes the isolated activation drill described above; live-environment rollback activation remains untested.
+
+The controller requires the running PostgreSQL API/generator/database, confirms `/version` reports PostgreSQL, records original container IDs and volume bindings, and creates a consistent read-only logical export through the reader role. It never mounts either original database volume into a test tool. Unique `canopyfaultrollback...` projects use new PostgreSQL and SQLite volumes; volume-name guards run before writes and cleanup. PostgreSQL remains the authoritative source of the copied records.
+
+Procedure: import the current snapshot into the clone; retain an older SQLite copy; add four identifiable PostgreSQL events (normal, incident opening, resolution and late arrival); fence clone writer/migrator logins and drain their sessions; export CURRENT clone PostgreSQL into a fresh SQLite file; activate the API against that file with the generator stopped. Before enabling writes, compare full row/state manifests, IDs, timestamps, station coverage, latest state, incidents, duplicate replay, dashboard assets, both health endpoints and API history. Only after this gate passes, verify a new SQLite write and incident, then start the generator and confirm progress. PostgreSQL stays fenced throughout SQLite activation. On failure, stop clone application writers and retain the clone for investigation; never resume automatically or switch to an old backup.
+
+| Check | Observed result |
+| --- | --- |
+| Source snapshot | 13,050 events, four states, four stations |
+| Fresh reverse export | 13,054 events and four states, exact-row hash `5c7d51c03a637e632358f859cc0b6c442b3f4761f3eeff5d9b8fbdd1fe0efc12` |
+| Older recovery copy | Missing all four deliberately added PostgreSQL event IDs |
+| Verification gate | All rows/states matched; latest/incident behavior, duplicate replay, assets, health and API checks passed before writers resumed |
+| New SQLite write | Event count 13,055; duplicate unchanged; new incident visible |
+| Generator after gate | Four additional readings observed |
+| Observed drill interval | 36.693 seconds, covering fresh export, activation, gate, new-write and generator checks; includes command overhead and is not a measured live outage |
+| Original resources | Same API/generator/PostgreSQL container IDs and volume bindings; original volumes never mounted by test tools |
+| Cleanup | Only isolated containers/volumes and test image tag removed |
+
+Safe command/exit-code evidence and summaries remain in ignored `backups/rollback-0732c6d6d37147498270d729eeb478af/`. Snapshots and full reading ledgers stay local and outside Git. No original database files were inspected or modified by the drill; the original generator continued its normal writes. Password files were used only by runtime authentication and were not opened, printed or hashed by the controller.
+
+The earlier SQLite-to-PostgreSQL cutover retains its separate **28.14-second conservative bound**, not an exact stopwatch measurement. Reverse-export rehearsal, complete clone activation and live rollback are separate claims. To return from PostgreSQL without omitting accepted writes, stop/fence every writer, export current PostgreSQL, validate the new SQLite database and application before resuming the selected writer. If PostgreSQL is unavailable, recover it first; switching straight to the old SQLite file loses newer writes. Once SQLite accepts new writes, switching back to the fenced PostgreSQL copy also requires a fresh transfer and validation. This drill does not establish automatic failover, high availability, AWS deployment or RDS Multi-AZ behavior.

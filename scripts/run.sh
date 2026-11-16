@@ -32,7 +32,7 @@ docker info >/dev/null
 case "$command" in
   start)
     docker compose up -d --build --wait --wait-timeout 180
-    printf '%s\n' "API ready: http://127.0.0.1:${API_PORT:-8000}" \
+    printf '%s\n' "API ready: http://127.0.0.1:${API_PORT:-8001}" \
       "Grafana viewer: http://127.0.0.1:${GRAFANA_PORT:-3000}" \
       'View logs: bash scripts/run.sh logs'
     ;;

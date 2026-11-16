@@ -1,4 +1,4 @@
-﻿# CanopyOps
+# CanopyOps
 
 A learning and portfolio project for synthetic greenhouse monitoring. No physical sensors, uploads, production users or production availability claims. The current implementation is a local SQLite application; greenhouse naming and PostgreSQL are planned changes, not completed features.
 
@@ -17,8 +17,8 @@ A learning and portfolio project for synthetic greenhouse monitoring. No physica
 From the project checkout:
 
 ```bash
-# API_PORT=8001 avoids the port-8000 conflict observed on this laptop.
-API_PORT=8001 bash scripts/run.sh
+# Compose publishes laptop port 8001 by default.
+bash scripts/run.sh
 bash scripts/run.sh status
 bash scripts/run.sh logs
 ```
@@ -37,7 +37,7 @@ The process runs as UID/GID 10001. Application files and installed dependencies 
 - `/tmp`: a 64 MiB API tmpfs. No normal API request has been demonstrated to require it; it is an explicit temporary-file allowance, not persistent storage.
 - No Python bytecode writes (`PYTHONDONTWRITEBYTECODE=1`).
 
-The API listens on 0.0.0.0:8000 in the container but is published only on laptop loopback. Metrics listens on 0.0.0.0:9100 inside the Compose network and is not published. `expose` documents the port; it is not a firewall. Prometheus has no published host port. Grafana is published only on loopback. Prometheus/Grafana use their own persistent volumes.
+The API listens on 0.0.0.0:8000 in the container and is published as 127.0.0.1:8001 by default. Override the laptop port with API_PORT if needed. Metrics listens on 0.0.0.0:9100 inside the Compose network and is not published. `expose` documents the port; it is not a firewall. Prometheus has no published host port. Grafana is published only on loopback. Prometheus/Grafana use their own persistent volumes.
 
 The allowlist-style `.dockerignore` excludes local environments, credentials, .env files, Git metadata, Terraform state and unrelated build artifacts. No secrets are supplied to the image build. Future AWS access will use scoped ECS task roles; database passwords will be runtime secrets, not image layers.
 

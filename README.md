@@ -177,7 +177,7 @@ The generator currently exits on a database exception. The first drill must reco
 
 ### Per-event evidence ledger
 
-Stage 2 will implement the ledger; it does not exist yet. Write an append-only, flushed durable record before attempting a test event, retaining the complete original reading locally so retries cannot invent a new ID, timestamp or measurement. Each record will include run_id, event_id, station_id, canonical payload SHA-256, attempt number, UTC/monotonic times, transition and any sanitized error classification.
+At contract definition the ledger did not exist. The stage-2 test-only implementation is now documented below; this does not add a production ingestion ledger. Write an append-only, flushed durable record before attempting a test event, retaining the complete original reading locally so retries cannot invent a new ID, timestamp or measurement. Each record will include run_id, event_id, station_id, canonical payload SHA-256, attempt number, UTC/monotonic times, transition and any sanitized error classification.
 
 Transitions must distinguish `created`, `attempted`, `acknowledged_insert`, `acknowledged_duplicate`, `uncertain`, and `verified_present`/`verified_absent`. A disconnect after submission is uncertain, not proof that a transaction failed. An acknowledgement follows transaction completion; a duplicate acknowledgement is valid only when stored content matches the attempted content. Flag conflicting content in the verifier even though the existing application currently ignores duplicate-ID content differences.
 
@@ -215,6 +215,74 @@ For rollback, export all CURRENT PostgreSQL events/states, including writes acce
 5. Specify RDS restore, TLS and role handling: exact compatible dump/restore commands, ownership/grants, private connectivity, runtime secrets and certificate/hostname verification. No cloud apply in this stage.
 
 Each verified stage gets a focused commit and push before the next begins. A missed objective, missing ledger outcome or incomplete fence is reported as failure/inconclusive, not converted into a portfolio success claim. No new AWS resources, Multi-AZ test, CI/CD or full rollback success is implied by this contract.
+
+## Stage 2: local interruption and uncertain-write evidence
+
+Completed on 16 November 2026 using an isolated clone of the CURRENT PostgreSQL dataset. The original SQLite-to-PostgreSQL migration evidence above is unchanged. This stage does not perform rollback activation, provision AWS, test RDS failover or add CI.
+
+```bash
+# Requires the existing local PostgreSQL stack and its ignored secret files.
+python3 scripts/verify_recovery.py
+# Unit tests require requirements-dev.txt in the selected environment.
+python -m pytest -q
+```
+
+The controller builds a uniquely tagged test image and refuses to proceed unless its application files match those in the live API container. The old running image ID was not available as a taggable local image, so this is a separate build, not a claim that the image binaries are identical. Image IDs and normalized source-code hashes are recorded. Recovery code stays under scripts and is mounted read-only into test tooling; the application code, Dockerfile, dependency locks and live generator were not changed by this stage.
+
+A consistent read-only PostgreSQL export produces a SQLite transport snapshot under ignored backups. This is a copy of current PostgreSQL data, not a reuse of the historical SQLite database or replacement by regenerated readings. The clone imports all snapshot events/states, matches its full manifest, and uses a different PostgreSQL volume, Compose project and network. Its API receives an ephemeral loopback port; no clone database port is published.
+
+### What the drill actually runs
+
+| Case | Fault and required result |
+| --- | --- |
+| Before commit | Terminate the real writer backend before the transaction commits; verify the whole dataset is unchanged, then replay the original reading once |
+| Lost commit acknowledgement | A test TCP proxy observes PostgreSQL's successful COMMIT response, suppresses it and disconnects the client; fresh-primary reconciliation finds the matching event without reinsertion |
+| Process restart | Exit the writer with code 73 after storage returns but before acknowledgement logging; a new process reconstructs the original reading from the ledger and verifies it without reinsertion |
+| Concurrent replay | Eight attempts of the same ID/content produce one insert and seven matching duplicates |
+| Conflicting content | Record the negative input before submission; the existing application ignores its duplicate ID, while the verifier rejects the content mismatch and issues no success acknowledgement |
+| Writer fence | Capture original login settings, apply NOLOGIN to the clone's writer/migrator roles, terminate the held writer transaction, verify rollback and refusal of a fresh writer connection, then restore the original settings |
+| Database interruption | Stop only the clone PostgreSQL container; observe readiness failure and generator exit, restart PostgreSQL, reconcile the pending fixture and explicitly restart the generator |
+
+The proxy parses only the backend message frames needed to suppress CommandComplete for COMMIT and the subsequent response. It is a plaintext, one-connection LOCAL test fixture, following the [PostgreSQL protocol message formats](https://www.postgresql.org/docs/17/protocol-message-formats.html). It is not a TLS proxy, a replacement for RDS testing or a production networking component. The lost-ack case is a real socket disconnect, not merely an exception raised after a successful function call.
+
+Fencing is guarded by the clone's random database marker, primary check, expected Compose labels and a volume distinct from the live database. The test administrator is the exclusive privileged controller; this does not fence a malicious superuser. Fresh writer credentials are proven to work before fencing; role metadata, a working reader/admin connection and rejected writer login prove the applied fence. The observed connection error had no SQLSTATE, so a SQLSTATE whitelist would have misclassified the test. The existing live migration script's freeze function has NOT been upgraded by this test-only controller.
+
+### Durable evidence and interpretation
+
+`events.jsonl` is append-only and records complete original readings before submission, attempts, acknowledgements, uncertain outcomes and fresh read-back verification. Writes and new-file directory entries request fsync. Threaded readers/writers use the same process lock; the controller serializes actor processes that write the same ledger. Multi-process concurrent appending is not supported. Partial trailing records and mismatched run IDs fail closed. A forced-short-write regression verifies that readers cannot see an incomplete threaded append.
+
+`negative-content.jsonl` separately records the deliberately conflicting submission and its known rejection. It is not silently counted as a successful write. A historical `uncertain` transition remains in the append-only ledger after resolution; final unresolved logical event IDs, rather than the count of historical uncertainty records, determine completion.
+
+`timeline.jsonl` records controller commands/exit codes, checkpoints, fault operations, operator-assisted restart and HTTP probes with UTC and monotonic timestamps. Container actors and the host controller have distinct clock-domain labels; durations below use only controller observations. Probe rounds wait 0.5 seconds and individual HTTP requests time out after 1 second; request latency and command overhead are included, so these are not exact server-outage measurements. Pre-fault summaries are persisted and a cleanup failure cannot be reported as overall success.
+
+The ledger's fsync mechanism and process-restart recovery were tested. Host power loss, filesystem hardware durability, full application high availability and universal exactly-once delivery were not tested or established.
+
+### Final verification run
+
+Run ID: `512f859396d1430f8baf2bcef36c5e76`. Evidence remains locally under `backups/recovery-512f859396d1430f8baf2bcef36c5e76/` and is not committed with raw data or credentials.
+
+| Observation | Result |
+| --- | --- |
+| Source clone snapshot | 10,316 existing events and four states; exact import manifest matched |
+| Main fixture reconciliation | Six event IDs verified, zero unresolved outcomes |
+| Acknowledgements | 13 acknowledged attempts covering five unique IDs; the remaining fixture was reconciled after process exit without its original acknowledgement |
+| Negative case | One conflicting submission recorded and rejected by the verifier |
+| API recovery | 14.666 seconds from first observed failure to successful readiness |
+| Processing recovery | 24.854 seconds from first observed failure to confirmed generator progress; operator-assisted |
+| Generator behavior | Exited with code 1 on database interruption; did not restart automatically |
+| Liveness versus processing | API liveness remained healthy and dashboard HTML returned HTTP 200 while storage readiness failed; database recovery alone did not restart the generator |
+| Writer control | One held backend terminated, no writer sessions remained, fresh writer login denied; original login settings restored |
+| Automated tests | 14 passed; one existing Starlette/httpx deprecation warning |
+| Live preservation | Same live API/generator/database container IDs; every snapshot event unchanged in live PostgreSQL; snapshot file unchanged |
+| Cleanup | Successful clone containers, volumes and test image tag removed; local ledgers/snapshot retained |
+
+The five-minute recovery target was met for this controlled operator-assisted exercise. RPO evidence is scoped to the ledgered fixture events. The unmodified generator has no durable per-event acknowledgement ledger, so this does not establish zero loss for every possible generator crash. The existing application's conflicting-ID-content behavior remains a recorded gap; verifier detection is not an application fix. Freshness exceeding the application's 120-second threshold was not exercised by this short interruption.
+
+During harness development, an image-ID pull/tagging problem and Docker Desktop's internal-network port behavior prevented initial setup. A misplaced assertion also wrongly expected an unchanged dataset after an intentional successful replay. These were corrected before the successful runs; diagnosed clone resources were removed while local failure reports remained. The writer-fence SQLSTATE assumption was corrected using independent database evidence. No live database faults or role changes were issued to troubleshoot them.
+
+On success the controller removes only its own uniquely named resources. On a failed drill it stops clone application writers, retains the database/role checkpoint and records failure for investigation. Inspect the retained project before any manual resume or cleanup; do not apply a blanket volume prune.
+
+Stage 3 remains the complete rollback activation drill in an isolated clone, including validation before enabling SQLite writes. Live rollback activation and RDS Multi-AZ failover remain untested. The earlier migration's 28.14-second conservative bound remains a separate result and is not replaced by these interruption timings.
 
 ## Remaining scope
 

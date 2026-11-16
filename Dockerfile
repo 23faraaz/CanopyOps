@@ -1,7 +1,13 @@
 # syntax=docker/dockerfile:1
 ARG PYTHON_IMAGE=python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
-FROM ${PYTHON_IMAGE} AS builder
+# Apply the available Debian security fix once for compatible builder/runtime libraries.
+FROM ${PYTHON_IMAGE} AS base
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS builder
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -9,7 +15,7 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --require-hashes --only-binary=:all: -r requirements.txt
 
-FROM ${PYTHON_IMAGE} AS runtime
+FROM base AS runtime
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -1,0 +1,7 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+include = ["canopy/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E9", "F"]

@@ -1,0 +1,27 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Python syntax, Ruff lint and format, pytest
+        run: python3 scripts/checks.py --only python
+      - name: Hadolint, actionlint, quiet Compose validation
+        run: python3 scripts/checks.py --only configuration
+      - name: Build, cache, health, storage and runtime exclusions
+        run: python3 scripts/checks.py --only container
+      - name: Strict HIGH and CRITICAL vulnerability gate
+        run: python3 scripts/checks.py --only scan

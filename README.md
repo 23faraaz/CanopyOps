@@ -9,7 +9,7 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
 - An SQS worker's storage selection now requires PostgreSQL. Its cloud queue integration is not deployed or end-to-end verified. Boto3 remains outside the local runtime dependencies and must be included in a future worker-specific build before using SQS.
-- No AWS resources or CI/CD are introduced by this stage. RDS PostgreSQL replaces the earlier DynamoDB plan. Multi-AZ is not provisioned.
+- Local and GitHub Actions CI checks are described below. No AWS resources or deployment/CD workflow exist. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
 
 ## Run
 
@@ -289,7 +289,7 @@ Stage 3 remains the complete rollback activation drill in an isolated clone, inc
 - Greenhouse naming/site count, sequence-number scope and restart behavior, and conflicting content for one event ID still require application decisions. Duplicate IDs retain the existing ignore behavior.
 - Add data retention deliberately; neither backend currently expires raw readings or deduplication records automatically.
 - Revalidate monitoring and processing-progress failure tests on PostgreSQL before CI/cloud work.
-- Future stages: CI, one Terraform-managed AWS environment with private RDS PostgreSQL and scoped IAM/secrets, then a rehearsed simulated local-to-AWS dump/restore migration. This completed stage is SQLite-to-local-PostgreSQL, not an AWS migration.
+- Future stages: one Terraform-managed AWS environment with private RDS PostgreSQL and scoped IAM/secrets, then a rehearsed simulated local-to-AWS dump/restore migration. This completed stage is SQLite-to-local-PostgreSQL, not an AWS migration.
 - Keep one environment. Multi-AZ and extra tasks are for justified time-boxed experiments later; there is no Multi-AZ environment to destroy now.
 
 ## Complete rollback activation: isolated clone
@@ -332,3 +332,46 @@ bash scripts/run.sh
 If a file is missing, stop and recover that existing password file from your private backup. Do not generate replacements for an initialized database: changing a file does not change a database role password. Restore filenames and restrictive host permissions, then recreate only the affected services against their existing named volumes. Never use `down --volumes`. Keep the private directory backed up securely outside Git/cloud sync; file loss is a recovery dependency, not something this repository can repair automatically.
 
 Troubleshooting: PowerShell ACL construction initially failed on SID translation and privileged security-descriptor updates before any files moved. Access-only `icacls` rules were then applied successfully and verified. Neither failure caused password replacement. `.gitignore` and the Docker build allowlist exclude secret files, optional environment files, SQLite databases, dumps and backups. No secret scanner was run against password files.
+
+## Repeatable checks and CI
+
+Run `python3 scripts/checks.py` from the checkout with Docker/Compose available. Host Python runs the controller; pinned Python 3.12 runs application checks in a disposable container. It installs the hash-locked `requirements-dev.txt`, compiles only `canopy`, `scripts`, and `tests`, checks Ruff lint/formatting, and runs pytest against temporary data. Ruff formatting and unused-import cleanup preserve application statements/logic; an AST comparison confirmed this separately. Runtime requirements remain unchanged and development tools are excluded from the application image.
+
+The same controller runs pinned Hadolint and actionlint containers, quiet base/PostgreSQL Compose validation, `scripts/verify_docker.py`, image artifact/development-package exclusion checks, and a local Trivy image-archive scan. The Docker harness uses its explicitly named SQLite-only Compose project, ephemeral loopback API port and new named volume; it ignores the live PostgreSQL activation override. It verifies UID 10001, dashboard/static assets, both health endpoints, private metrics, persistence after replacement, graceful shutdown and dependency-layer reuse after a source-only change. Build times are layer-cold versus cached, not fresh-host download benchmarks.
+
+Trivy scans vulnerabilities only, fails on every HIGH or CRITICAL finding (including unfixed findings), and fails closed if its database cannot be obtained or scanning fails. It downloads public vulnerability metadata, receives only an application image archive, and uploads no image. It has no Docker socket or host secret-directory mount. Results cover this image/platform and the database at scan time, not unknown vulnerabilities, application authorization or every Compose service image. Safe counts/exit status are retained in ignored `backups/checks-summary.json`; temporary image archives and scan databases are removed. CVE/package/fixed-version metadata is printed for actionable failures; no environment or password values are printed.
+
+`.github/workflows/ci.yml` runs this command on pull requests and pushes to main with `contents: read`, a 25-minute timeout, concurrency cancellation and immutable checkout/tool-image references. Checkout does not persist Git credentials. CI uses disposable synthetic SQLite records, no real database volumes/passwords, no AWS/OIDC or deployment steps, and no `pull_request_target`. Container tools are development infrastructure, not runtime dependencies. PostgreSQL interruption and rollback drills remain operator-run local tests; CI does not exercise the real dataset.
+
+Merge enforcement is a separate repository setting: the public branch API reported `main` unprotected during this work. After a successful workflow run, a repository administrator must enable a main-branch rule requiring the `checks` status, require pull requests/up-to-date checks as appropriate, and restrict bypasses. The workflow failing is not proof that GitHub rejects a merge. No authenticated GitHub administration tool is available in this session; merge blocking is therefore an explicit outstanding requirement.
+
+Existing recovery verifier limitation: `scripts/verify_recovery.py` deliberately rejects byte-different application sources between live and test images. The current live containers were not upgraded to the formatted application image. Until a planned local rebuild/recreation, that older verifier will refuse the source comparison; its historical result is unchanged. The new complete rollback drill was rerun successfully after formatting and external-password relocation: run `e8c11a2f56e844fd812315e1af40b9dc`, 13,756 exported events/four states, all gates passed, 22.213-second observed drill interval (not live downtime), isolated resources removed. No live database fault or role change was used.
+
+### Validation and vulnerability triage
+
+The initial local checks passed syntax, Ruff lint/format, all 14 pytest tests (one existing Starlette/httpx deprecation warning), Hadolint, actionlint, both quiet Compose validations, container functional checks and artifact exclusions. An application AST comparison also passed apart from unused-import cleanup. The first strict Trivy result was **49 HIGH package findings and zero CRITICAL**, so the overall check failed as designed; this was not a successful security gate.
+
+Two findings named zlib fixes (`CVE-2026-76844` and `CVE-2026-85091`). The official Python tag still resolved to the already pinned digest, while Debian's security repository offered `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1`. The Dockerfile now applies that exact package update in a shared base stage used by builder and runtime, preserving compatible libraries and dependency-before-source caching. See the [Debian fixed-version record](https://security-tracker.debian.org/tracker/CVE-2026-85091). Package availability and the base digest were checked, rather than assuming an image rebuild applied updates.
+
+The other initial findings had no fixed version listed: util-linux-related packages, ACL, ncurses, SQLite, systemd/udev and Perl. These are package findings, with multiple packages sharing a CVE; they are not 47 distinct vulnerabilities. No application-runtime Python package HIGH/CRITICAL findings were reported in that scan. Lack of a vendor fix does not establish harmlessness. Next security work requires package-specific applicability review and vendor/base updates, or an explicitly reviewed, bounded exception with rationale and expiry. This work adds no allowlist and does not enable `--ignore-unfixed`.
+
+The complete check exits nonzero on these findings. CI must be observed through GitHub after the commit is pushed; a local result alone is not a GitHub Actions result. Successful unit/container checks do not override a failed vulnerability gate. Main-branch protection remains a separate administrator requirement described above.
+
+One revised-container functional run: image size **57,682,345 bytes**, layer-cold build **16.70 s**, cached build **1.34 s**, source-only rebuild **1.49 s**. Dependency installation was cached while the changed application COPY layer rebuilt. UID 10001, read-only source/root filesystem, writable isolated SQLite directory, dashboard assets, both health endpoints, private metrics, storage after replacement and shutdown exit code 0 all passed. The harness now finds BuildKit stage counters dynamically; introducing the shared security-update stage initially exposed its old hardcoded counters and that verifier was corrected before this passing functional run. These timings include local command overhead and warm base/download caches.
+
+Post-fix local scan: **47 HIGH package findings across 11 distinct CVEs, zero CRITICAL**, all remaining entries list no fixed version. Both zlib findings disappeared; the built image reports the intended patched zlib package version. The strict scan still exits 1. All nonsecurity checks passed locally; stage completion is blocked on the remaining vulnerability assessment/remediation and administrator-enabled merge enforcement. No security exception was introduced. The CI workflow exposes Python, configuration, container and scan as separate steps, using `--only` selections of the same local controller so their results can be distinguished.
+
+CI execution uses the same four commands as the independently selectable local phases:
+
+```bash
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+python3 scripts/checks.py --only container
+python3 scripts/checks.py --only scan
+```
+
+The first three phases passed locally; scan failed with the findings above. See [CI runs for this workflow](https://github.com/23faraaz/CanopyOps/actions/workflows/ci.yml) for the actual result attached to the published commit, rather than interpreting workflow creation as a passing run. No production CD or NL2SQL/Olist import workflow was copied into this project.
+
+Final repeatability run after making the source marker unique: **30.00 s layer-cold / 2.16 s cached / 2.19 s source-only**, image **57,682,512 bytes**. All container checks passed again, including an explicitly rebuilt source COPY and cached dependency installation. The previous fixed comment had allowed reuse of a prior test's source layer; the stronger assertion caught it, and the unique marker corrects that test-fixture problem. Build timings vary with local/network load; neither run is a cold-download benchmark. The security scan applies to the same runtime sources/dependencies/OS package versions, independently of image metadata differences between builds.
+
+External directory placement and ACLs reduce accidental source/build inclusion; they do not isolate passwords from every process running as the same Windows account. No password files or optional environment-file contents were read during this work.

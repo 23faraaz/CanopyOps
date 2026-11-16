@@ -35,3 +35,5 @@ backups/
 **/*.dump
 **/*.sql.gz
 **/*.backup
+**/*.sql
+!canopy/migrations/*.sql

@@ -1,7 +1,6 @@
 import json
 import os
 import sqlite3
-from decimal import Decimal
 from canopy.domain import STATIONS, advance
 
 class LocalStore:
@@ -40,62 +39,11 @@ class LocalStore:
             rows = db.execute('SELECT payload FROM events WHERE station=? ORDER BY observed DESC LIMIT 60', (station,))
             return list(reversed([json.loads(r[0]) for r in rows]))
 
-class AwsStore:
-    '''Table contract: string partition key pk, string sort key sk. No secondary indexes required.'''
-    def __init__(self):
-        import boto3
-        self.table = boto3.resource('dynamodb').Table(os.environ['DYNAMODB_TABLE'])
-        self.client = self.table.meta.client
-
-    def process(self, reading):
-        from boto3.dynamodb.types import TypeSerializer
-        from botocore.exceptions import ClientError
-        serializer = TypeSerializer()
-        def encode(item):
-            return {k: serializer.serialize(v) for k, v in json.loads(json.dumps(item), parse_float=Decimal).items()}
-        key = {'pk': 'STATION#' + reading.station_id, 'sk': 'STATE'}
-        marker = {'pk': 'EVENT#' + reading.event_id, 'sk': 'EVENT'}
-        for _ in range(5):
-            if self.table.get_item(Key=marker, ConsistentRead=True).get('Item'):
-                return False
-            previous = self.table.get_item(Key=key, ConsistentRead=True).get('Item')
-            version = int(previous['version']) if previous else 0
-            state = advance(json.loads(previous['payload']) if previous else None, reading)
-            condition = 'version = :v' if previous else 'attribute_not_exists(pk)'
-            put = {'TableName': self.table.name, 'Item': encode({**key, 'version': version + 1, 'payload': json.dumps(state)}),
-                   'ConditionExpression': condition}
-            if previous:
-                put['ExpressionAttributeValues'] = encode({':v': version})
-            try:
-                # Use a low-level client: the resource client would serialize these values twice.
-                import boto3
-                boto3.client('dynamodb').transact_write_items(TransactItems=[
-                    {'Put': {'TableName': self.table.name, 'Item': encode(marker), 'ConditionExpression': 'attribute_not_exists(pk)'}},
-                    {'Put': put},
-                    {'Put': {'TableName': self.table.name, 'Item': encode({'pk': key['pk'], 'sk': 'READING#' + reading.observed_at.isoformat() + '#' + reading.event_id, 'payload': reading.model_dump_json()})}},
-                ])
-                return True
-            except ClientError as exc:
-                if exc.response['Error']['Code'] != 'TransactionCanceledException':
-                    raise
-        raise RuntimeError('Concurrent updates exceeded retry budget; leave message for retry')
-
-    def states(self):
-        result = {}
-        for station in STATIONS:
-            item = self.table.get_item(Key={'pk': 'STATION#' + station, 'sk': 'STATE'}, ConsistentRead=True).get('Item')
-            if item:
-                result[station] = json.loads(item['payload'])
-        return result
-
-    def history(self, station):
-        from boto3.dynamodb.conditions import Key
-        rows = self.table.query(KeyConditionExpression=Key('pk').eq('STATION#' + station) & Key('sk').begins_with('READING#'),
-                                ScanIndexForward=False, Limit=60, ConsistentRead=True)['Items']
-        return list(reversed([json.loads(r['payload']) for r in rows]))
-
 def store():
     backend = os.getenv('BACKEND', 'local')
-    if backend not in ('local', 'aws'):
-        raise ValueError('BACKEND must be local or aws')
-    return AwsStore() if backend == 'aws' else LocalStore()
+    if backend == 'local':
+        return LocalStore()
+    if backend == 'postgres':
+        from canopy.postgres import PostgresStore
+        return PostgresStore()
+    raise ValueError('BACKEND must be local or postgres; DynamoDB is no longer supported')

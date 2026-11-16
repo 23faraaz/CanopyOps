@@ -15,8 +15,8 @@ def handle(payload, repository):
     LAST.set(time.time())
 
 def main():
-    if os.getenv('BACKEND') != 'aws':
-        raise SystemExit('Worker requires BACKEND=aws and SQS_QUEUE_URL. Local simulator writes directly to SQLite.')
+    if os.getenv('BACKEND') != 'postgres':
+        raise SystemExit('Worker requires BACKEND=postgres and SQS_QUEUE_URL. The local generator writes directly to its configured store.')
     import boto3
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     start_metrics('worker')

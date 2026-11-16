@@ -27,3 +27,6 @@
 **/*.log
 **/dist/
 **/build/
+
+**/.secrets/
+**/backups/

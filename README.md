@@ -1,49 +1,134 @@
 # CanopyOps
 
-A learning and portfolio project for synthetic greenhouse monitoring. No physical sensors, uploads, production users or production availability claims. The current implementation is a local SQLite application; greenhouse naming and PostgreSQL are planned changes, not completed features.
+A local cloud/DevOps learning project using persisted synthetic monitoring readings. No physical sensors, uploads, production users or production availability claims. The current code still defines four woodland stations; greenhouse naming is a recorded application gap.
 
-## Implemented system
+## Current implemented system
 
-- FastAPI serves the dashboard/static assets, health endpoints, station overview and history.
-- `python -m canopy.api` starts Uvicorn and a separate Prometheus-compatible metrics listener.
-- A local generator writes synthetic readings directly to SQLite. It is not an SQS consumer.
-- Docker Compose runs the API, generator, Prometheus and Grafana. Monitoring was implemented before the revised PostgreSQL-first roadmap; it will be retained and revalidated after that migration.
-- Four woodland stations are currently configured. Keep this distinction visible until the application is deliberately updated.
-- Legacy SQS/DynamoDB adapter source exists but is not included in the local runtime dependency set or verified as an operational pipeline. The revised cloud plan uses RDS PostgreSQL, replacing DynamoDB.
-- No PostgreSQL adapter, versioned schema migrations, separate database roles, CI pipeline, Terraform infrastructure or AWS deployment exists yet.
+- FastAPI dashboard/API: `python -m canopy.api`, laptop http://127.0.0.1:8001.
+- PostgreSQL is now the active local database on this checkout. All existing SQLite readings were migrated; they were not regenerated.
+- SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
+- The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
+- An SQS worker's storage selection now requires PostgreSQL. Its cloud queue integration is not deployed or end-to-end verified. Boto3 remains outside the local runtime dependencies and must be included in a future worker-specific build before using SQS.
+- No AWS resources or CI/CD are introduced by this stage. RDS PostgreSQL replaces the earlier DynamoDB plan. Multi-AZ is not provisioned.
 
-## Run in WSL
+## Run
 
-From the project checkout:
+In WSL, from the project checkout:
 
 ```bash
-# Compose publishes laptop port 8001 by default.
 bash scripts/run.sh
 bash scripts/run.sh status
 bash scripts/run.sh logs
 ```
 
-App: http://127.0.0.1:8001. Grafana: http://127.0.0.1:3000, with anonymous read-only viewer access for this loopback-only synthetic lab. The generator starts with the stack. Use `bash scripts/run.sh stop` to stop it and retain named volumes.
+The migration creates an ignored `compose.override.yaml` to activate PostgreSQL for ordinary Compose commands. The tracked `compose.yaml` remains the SQLite baseline; `compose.postgres.yaml` is the explicit PostgreSQL overlay. Do not simply remove the override to roll back: the retained SQLite file does not contain new PostgreSQL writes.
 
-For a Python-only run, create/activate a Python virtual environment, install `requirements-dev.txt` with `python -m pip install --require-hashes -r requirements-dev.txt`, then run `python -m canopy.api`. In a second terminal using the same working directory/environment, run `python -m canopy.simulator`. The Python-only API defaults to 127.0.0.1:8000, with loopback metrics on port 9100.
+`bash scripts/run.sh stop` preserves all named volumes. `docker compose down` also retains volumes. Never use `down --volumes` or a volume prune on the real environment if data must survive.
 
-## Container decisions and writable paths
+A fresh checkout defaults to SQLite. To migrate an existing source volume, follow the procedure below. Do not run an empty PostgreSQL instance and substitute newly generated data for the source records.
 
-The Dockerfile uses the same digest-pinned Python 3.12 slim image in both stages. Runtime dependencies are hash-locked and installed before copying `canopy/`, including its static assets. Wheel-only dependencies need no compiler: multi-stage separates installation from runtime but is not evidence of a large compiler-toolchain size reduction. Test packages stay outside the runtime image.
+## Storage inspection and schema
 
-The process runs as UID/GID 10001. Application files and installed dependencies are root-owned. Compose makes the root filesystem read-only and provides:
+The actual source is `/data/canopy.db` in the API's SQLite named volume. It contains:
 
-- `/data`: a named volume holding `canopy.db`, `canopy.db-wal` and `canopy.db-shm`. A new volume inherits the image directory's UID/GID 10001 ownership.
-- `/tmp`: a 64 MiB API tmpfs. No normal API request has been demonstrated to require it; it is an explicit temporary-file allowance, not persistent storage.
-- No Python bytecode writes (`PYTHONDONTWRITEBYTECODE=1`).
+```sql
+CREATE TABLE events (id TEXT PRIMARY KEY, station TEXT, observed TEXT, payload TEXT);
+CREATE INDEX event_station ON events(station, observed);
+CREATE TABLE states (id TEXT PRIMARY KEY, payload TEXT);
+```
 
-The API listens on 0.0.0.0:8000 in the container and is published as 127.0.0.1:8001 by default. Override the laptop port with API_PORT if needed. Metrics listens on 0.0.0.0:9100 inside the Compose network and is not published. `expose` documents the port; it is not a firewall. Prometheus has no published host port. Grafana is published only on loopback. Prometheus/Grafana use their own persistent volumes.
+The API reads all state rows and the newest 60 event payloads per station. Processing checks the global event ID, inserts history and updates latest state/incident JSON in one transaction. No foreign-key constraints existed in SQLite; relationships are validated explicitly during transfer.
 
-The allowlist-style `.dockerignore` excludes local environments, credentials, .env files, Git metadata, Terraform state and unrelated build artifacts. No secrets are supplied to the image build. Future AWS access will use scoped ECS task roles; database passwords will be runtime secrets, not image layers.
+PostgreSQL schema version `001_initial.sql` preserves these IDs, station references, original timestamp strings and complete payload text. A separate `observed_at timestamptz` column provides native history ordering. Event IDs remain a primary key. Source states are copied exactly, not rebuilt from history. New writes atomically insert an event and update state, with per-station transaction advisory locking and the global primary key protecting concurrent deliveries.
 
-Exec-form startup passes signals to the API process. Docker checks `/health/live`; `/health/ready` verifies storage access. Neither proves that synthetic readings are progressing.
+Timestamp comparisons in application state now use parsed datetimes instead of serialized-string ordering. A regression test covers whole-second versus fractional-second observations. Equal timestamps still retain the previous state; no sequence strategy was added.
 
-## Verification commands
+## Credentials and database permissions
+
+Local-only random secrets are generated by `python3 scripts/init_secrets.py`. Existing secrets are never replaced. `.secrets/`, backups and the backend-activation override are ignored by Git and excluded from the image context. No passwords are baked into image layers, build arguments, tracked Compose configuration or logs.
+
+On native Linux, the host secret directory is mode 0700. Individual file-based Compose secrets are readable by the container user; only each service's required files are mounted. Protect the Windows host directory using your user-account ACLs. This is a local Compose mechanism, not AWS Secrets Manager.
+
+| Role | Purpose and grants |
+| --- | --- |
+| `postgres` | Local bootstrap administrator; never used by the API or generator |
+| `canopy_migrator` | Schema owner, versioned migrations and data transfer |
+| `canopy_reader` | API: schema usage and SELECT on events/states only |
+| `canopy_writer` | Generator/future worker: SELECT, INSERT events, INSERT/UPDATE states; no event UPDATE, DELETE or schema DDL |
+
+All three application/migration roles are non-superusers with no role/database creation. Migrations are checksum-checked, ordered SQL files in `canopy/migrations/`; they are run explicitly with the migration role, not by API startup. Connection settings are `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD_FILE`, and optional `PGSSLMODE`. RDS will require runtime secrets and an explicit TLS configuration later.
+
+## Repeatable migration procedure
+
+Prerequisites: the actual SQLite volume, Docker/Compose, Python 3, a clean local PostgreSQL target, and no external writers. The scripts manage this dedicated local stack's API and generator. Stop any additional/manual writer before proceeding. The target database is not published to a host port.
+
+```bash
+python3 scripts/init_secrets.py
+mkdir -p backups
+docker compose -f compose.yaml -f compose.postgres.yaml up -d --wait postgres
+docker build -t canopyops:local .
+python3 scripts/migrate_local.py rehearse
+```
+
+Rehearsal uses Python's SQLite online-backup API to take a consistent snapshot of the real source while it remains online. It imports into a separately named disposable PostgreSQL project, applies versioned migrations, verifies repeat import is a no-op, exercises duplicate/late/concurrent delivery, checks forbidden actions, runs the PostgreSQL API on an isolated port, and reverse-exports all rows to SQLite. Only that rehearsal project's volumes are removed; source data and backup files remain.
+
+Final cutover, after a successful rehearsal:
+
+```bash
+python3 scripts/migrate_local.py cutover
+```
+
+The command:
+
+1. Applies migrations and refuses a non-empty final target before stopping writes.
+2. Stops the generator and API. The API is also stopped because SQLite readiness/metrics initialization can issue schema statements. Refuses a source volume still held by another running container.
+3. Uses SQLite's backup API, then integrity-checks the final backup. Original source volume remains intact.
+4. Imports all events and states in one PostgreSQL transaction. Any failure rolls back that import. An already identical import is a no-op; a differing target is never silently overwritten.
+5. Verifies row counts, unique IDs, station coverage, timestamp agreement, state/event/incident references, latest observation times and a checksum over every original event field and state payload. It also verifies native PostgreSQL timestamps.
+6. Replays an existing event using the writer role and proves the complete dataset is unchanged. Tests denied schema/data actions with runtime credentials.
+7. Starts and smoke-checks the read-only PostgreSQL API before resuming the generator. Writes the local backend override and checks for a new durable PostgreSQL event after resuming.
+
+Evidence/checkpoints are stored under `backups/`, not committed with raw data. On failure, inspect the last checkpoint, active backend and service status. Do not rerun an import against a changing target, resume two writers, or restore the old backup over newer accepted data. Before resume, failed checks should leave writers paused for investigation. After resume, do not automatically revert: new target writes must be preserved.
+
+## Actual migration evidence, 16 November 2026
+
+| Check | Observed result |
+| --- | --- |
+| Final SQLite source | 4,500 unique events, four states, 1,125 events per station |
+| Source backup/volume checksum | `deeb2c22fc2effd15c1f9347293c0062588f9b4c74ad62b9fda806d658b3b1f1` |
+| Final import before writes resumed | Matching exact-row validation for all events and states |
+| Post-resume audit | Every one of the 4,500 source events still present with exactly the same fields; new PostgreSQL events present |
+| Rehearsal | 4,396 source events/four states, exact import and idempotent repeat import |
+| Rehearsal concurrency | Eight deliveries of one new ID produced one accepted event |
+| Rehearsal reverse transfer | 4,400 events: all 4,396 source events plus all four rehearsal writes |
+| Permission checks | Five forbidden runtime database/schema actions denied |
+| API checks | Dashboard, JS/CSS, liveness, readiness and PostgreSQL-backed metrics passed |
+| Automated tests | Nine passed; one existing Starlette/httpx deprecation warning |
+| PostgreSQL persistence | 4,656 events/four states with identical checksum before and after database-container replacement |
+
+The live cutover completed the data checks and resumed PostgreSQL writes, but the final progress-reporting command failed because a nested Windows command string was quoted incorrectly. The app was not reverted. The reporting command was moved into a Python module, and the read-only audit proved source preservation and ongoing processing.
+
+The source's last observation was 09:20:31.995426 UTC and the first new PostgreSQL observation was 09:20:53.141128 UTC: a 21.15-second reading gap. From the cutover command's timestamp to that first new observation was a conservative 28.14-second wall-clock bound, within the agreed five-minute budget. The original stopwatch result was lost with the reporting error; this bound is not an exact HTTP-outage measurement. Database persistence was checked in a later, separate brief generator pause.
+
+A Windows CRLF secret-file issue was also found and corrected during rehearsal. Secret generation now uses LF; bootstrap trims CR/LF. Existing mounted secret files may require container recreation after an intentional file change. No source records were discarded to troubleshoot either issue.
+
+## Rollback without losing accepted PostgreSQL writes
+
+Dependencies: PostgreSQL must still be readable, both sets of runtime writers must be stopped, and the SQLite-compatible schema/payload format must remain unchanged. If PostgreSQL is unavailable, recover it first; reverting to the old SQLite snapshot cannot guarantee zero data loss.
+
+```bash
+python3 scripts/migrate_local.py rollback
+```
+
+This stops the managed generator/API, takes a consistent repeatable-read view of **all current PostgreSQL events and states**, exports a new SQLite file, validates its counts and complete-row checksum, archives the previous SQLite file/journals, installs the verified export, removes the activation override and starts SQLite API/generator. The PostgreSQL volume is preserved and PostgreSQL is stopped after the SQLite service restarts. Do not delete either volume during the rollback decision window.
+
+The reverse export, including four post-import writes, was rehearsed. The complete live rollback activation has not been exercised on the real environment; doing so would be a separate controlled drill. Checkpoints and source backups are recovery evidence, not a substitute for that drill. If future schema changes are incompatible with SQLite, the reverse exporter must be changed and rehearsed before using this rollback path.
+
+Acceptable data loss for this local cutover was zero accepted source events; no readings were regenerated as a replacement. Writes paused for transfer, so missing observations during the pause are downtime, not discarded accepted events. The new PostgreSQL dataset is authoritative after resume.
+
+## Container and monitoring baseline
+
+The startup command remains `python -m canopy.api`. Builder/runtime use the same digest-pinned Python 3.12 slim base. Locked runtime dependencies are installed before `COPY canopy/`; psycopg adds the database driver and bundled client libraries. No compiler or development-test dependencies are installed in runtime. The source and dependencies are root-owned; the API/generator run as UID/GID 10001 with a read-only root, private metrics and temporary /tmp mounts. SQLite development uses a named /data volume. The official PostgreSQL image initializes its named data volume and runs the server as the postgres OS user.
 
 ```bash
 python -m pytest -q
@@ -51,70 +136,14 @@ python3 scripts/verify_docker.py
 python3 scripts/verify_monitoring.py
 ```
 
-Tests require development dependencies; both Docker scripts use only Python's standard library plus Docker and recent Compose with `!override` support. They use unique test projects and disposable test volumes. Their cleanup does not remove the normal stack's volumes. The Docker baseline script temporarily changes a CSS file and restores its exact bytes; do not edit that file concurrently.
+The first Docker script explicitly tests SQLite in an isolated project, ignoring the active PostgreSQL override. Its source-change fixture restores the original CSS bytes; do not edit that file concurrently. It validates non-root startup, assets, health, private metrics, SQLite persistence, shutdown and dependency reuse. Its no-cache timing is layer-cold, not an empty-cache download benchmark. The post-driver regression measured 13.66 seconds without layer cache, 1.74 seconds cached, 1.74 seconds for a source-only change, and a Docker-reported image size of 57,544,279 bytes. The latest local JSON report is ignored by Git. A fully cold benchmark and an explicit uncached source-COPY assertion remain unfinished evidence tasks.
 
-For manual endpoint checks while the stack runs:
+The existing four-service monitoring verifier exercises the SQLite baseline; the PostgreSQL API/storage metric was checked separately after cutover. A healthy website/stopped-processing and missing-metrics failure exercise remains to be implemented. Vulnerability scanning, CI and production resilience have not been claimed as completed.
 
-```bash
-curl -f http://127.0.0.1:8001/health/live
-curl -f http://127.0.0.1:8001/health/ready
-curl -f http://127.0.0.1:8001/static/app.js
-curl -f http://127.0.0.1:8001/static/style.css
-docker compose exec api id
-```
+## Remaining scope
 
-`docker compose down` retains data. Adding `--volumes` deletes it; do not use that option for data you intend to preserve.
-
-## Evidence and limits
-
-The Docker baseline was rerun successfully on 16 November 2026:
-
-| Check | Observed result |
-| --- | --- |
-| Build without layer cache | 18.73 seconds |
-| Unchanged cached build | 3.02 seconds |
-| Source-only rebuild | 2.65 seconds; dependency installation reported cached |
-| Docker-reported image size | 52,966,520 bytes (about 53.0 MB decimal) |
-| Runtime UID | 10001 |
-| Dashboard, JS/CSS, liveness and readiness | HTTP 200 |
-| Metrics | Reachable from a peer container; no host metrics publication |
-| SQLite persistence | Identical latest event IDs after container replacement |
-| API shutdown | Completed shutdown log and container exit code 0 |
-
-These timings are machine-specific. The no-cache run was **layer-cold**, with previously downloaded base image and pip packages potentially reused. It is not a fully cold download benchmark. The script checks dependency cache reuse, but its source-COPY assertion currently only checks that the step appears in the log, rather than explicitly requiring that step to be uncached.
-
-At commit `44d1715`, six application tests passed and the separate monitoring integration check verified generated readings, healthy Prometheus targets, all nine panel expressions through Grafana's datasource proxy, non-root services and clean generator shutdown. That monitoring check was not rerun as part of this baseline audit. Asset HTTP checks are not visual browser verification.
-
-A vulnerability scan has not completed. Earlier automatic approval review blocked Docker Scout because of possible external disclosure of private image metadata/content. Do not present the image as vulnerability-free.
-
-## Next unfinished verification
-
-1. Run a genuinely cold benchmark with an isolated BuildKit builder, recording which downloads are included, without pruning the user's shared caches.
-2. Strengthen the source-change check to prove the source COPY step rebuilt while dependency installation remained cached.
-3. Record those results and push the focused Docker-evidence commit before implementing PostgreSQL.
-
-## Existing application gaps
-
-- Four woodland stations and `station_id` naming differ from the intended greenhouse model.
-- Events have no sequence number or documented tie-break/restart strategy. Equal timestamps currently retain the previous state.
-- Repeated event IDs are ignored without flagging conflicting content.
-- Latest-state ordering compares serialized timestamp strings. PostgreSQL work needs native timestamp ordering tests, including fractional-second edge cases.
-- The worker still selects the legacy DynamoDB backend. It must be updated for PostgreSQL before any cloud worker deployment.
-- No durable processing-progress signal for an independent local worker exists: the current local generator bypasses the worker. Healthy-website/stopped-processing and missing-metrics failure exercises remain unfinished.
-- Raw SQLite readings and deduplication markers have no automatic retention policy.
-
-These are recorded gaps, not changes included in the Docker milestone.
-
-## Revised roadmap
-
-Complete, verify, commit and push one stage before moving on:
-
-1. Local PostgreSQL with versioned migrations, separate migration/runtime roles, persistence, duplicate and out-of-order tests. Preserve the SQLite baseline and plan existing-data transfer explicitly.
-2. Revalidate monitoring on PostgreSQL; demonstrate healthy API with stopped processing, stale readings and missing metrics.
-3. CI: application tests, Dockerfile lint, image build and vulnerability checks. Claim each check only after a successful run.
-4. One AWS environment using modular Terraform, protected S3 state with native locking, ECS Fargate/ECR/ALB, custom-domain HTTPS and private RDS PostgreSQL. Justify outbound connectivity and cost; add no resources solely for appearance.
-5. Simulated local-to-AWS migration: rehearse dump/restore; state downtime/data-loss allowances and dependencies; pause writes for final transfer; verify counts, timestamps, relationships and behavior. Measure downtime and explain rollback after new writes.
-6. Deployment automation using GitHub OIDC and immutable image digests. Terraform owns the desired ECS release; separate image publishing, infrastructure apply and manual destroy. Test a failed release and recovery.
-7. Failure/security/cost evidence, restore to a separate database, bounded task/log/metric/data retention, and estimated versus actual spend. Additional API tasks or Multi-AZ RDS require a justified, time-boxed exercise.
-
-No cloud resources or CI/CD are introduced by this audit. The earlier downloaded HTML architecture is a historical design reference, not the current implemented architecture or proof of deployment.
+- Greenhouse naming/site count, sequence-number scope and restart behavior, and conflicting content for one event ID still require application decisions. Duplicate IDs retain the existing ignore behavior.
+- Add data retention deliberately; neither backend currently expires raw readings or deduplication records automatically.
+- Revalidate monitoring and processing-progress failure tests on PostgreSQL before CI/cloud work.
+- Future stages: CI, one Terraform-managed AWS environment with private RDS PostgreSQL and scoped IAM/secrets, then a rehearsed simulated local-to-AWS dump/restore migration. This completed stage is SQLite-to-local-PostgreSQL, not an AWS migration.
+- Keep one environment. Multi-AZ and extra tasks are for justified time-boxed experiments later; there is no Multi-AZ environment to destroy now.

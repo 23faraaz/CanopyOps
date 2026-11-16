@@ -36,7 +36,7 @@ def status(reading):
 
 def advance(previous, reading):
     data = reading.model_dump(mode='json')
-    if previous and previous['reading']['observed_at'] >= data['observed_at']:
+    if previous and datetime.fromisoformat(previous['reading']['observed_at']) >= reading.observed_at:
         return previous
     reasons = status(data)
     incidents = list(previous.get('incidents', [])) if previous else []

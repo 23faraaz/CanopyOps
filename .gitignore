@@ -23,3 +23,9 @@ terraform.tfvars
 /APPLICATION_GAPS.md
 /DOCKER_VERIFICATION.json
 /DOCKER_SCAN.md
+
+.secrets/
+backups/
+
+/compose.override.yaml
+/compose.override.yaml.tmp

@@ -505,3 +505,17 @@ On 16 November 2026 the project owner explicitly approved the three temporary ex
 
 
 After the explicit approval, the real Linux scan passed locally: raw Trivy HIGH/CRITICAL findings **0**, the three known SQLite CVEs remained visible as **accepted until 2026-11-23T00:00:00Z**, and no blocked advisory remained. The original severity and exit-code behavior were retained. The locked Python check then passed all **30 tests**, dependency consistency, syntax and Ruff checks; Hadolint, actionlint and quiet Compose validation also passed. The GitHub run for the published commit must be consulted for its actual remote result; local success alone is not a CI claim.
+
+## Protected main branch
+
+Configured on 16 November 2026 using the authenticated WSL GitHub CLI; this supersedes the earlier lack-of-administration-access limitation. The reproducible nonsecret settings are in `security/main-branch-protection.json`. GitHub's read-back confirms a pull-request requirement, strict/up-to-date `checks` from GitHub Actions app ID 15368, administrator enforcement, conversation resolution, and disabled force pushes/deletion. The latest observed `checks` job was successful before enabling the rule.
+
+This is a solo-maintainer repository: PRs are required, with **zero mandatory second-person approving reviews**. An author cannot supply independent review of their own changes; no independent-review claim is made. Add another reviewer and increase the count when one is available. Repository administrators can still edit the protection settings; current protections do not prevent a privileged administrator changing policy itself.
+
+Subsequent stages use feature branches and PRs, wait for the required `checks` result, then merge normally without an administrator bypass or force push. Use the feature branch rather than pushing work directly to main. GitHub Actions permissions remain scoped separately from repository administration; no credentials were copied into this policy file.
+
+```bash
+# Run from WSL after normal GitHub CLI authentication; no token output required.
+gh api repos/23faraaz/CanopyOps/branches/main/protection \
+  --jq '{checks: .required_status_checks.checks, strict: .required_status_checks.strict, admins: .enforce_admins.enabled, pr: .required_pull_request_reviews.required_approving_review_count}'
+```

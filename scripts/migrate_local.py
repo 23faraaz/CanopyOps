@@ -56,7 +56,7 @@ def main():
         if (ROOT/'compose.override.yaml').exists():
             raise RuntimeError('Rehearsal expects the current source to be SQLite')
         project='canopyrehearsal'+uuid.uuid4().hex[:8]
-        ports=ROOT/'.secrets'/('ports-'+token+'.yaml')
+        ports=backup_dir/('ports-'+token+'.yaml')
         ports.write_text('services:\n  api:\n    ports: !override\n      - "127.0.0.1::8000"\n',encoding='utf-8')
         rehearsal=pg+['-f',str(ports),'-p',project]
         try:

@@ -57,7 +57,7 @@ def main():
     # Snapshot service has database network access, one runtime reader secret,
     # and an evidence bind only: no source database volume is mounted.
     snapshot=folder/'snapshot.json'
-    secret_path=str(ROOT/'.secrets/pg_reader')
+    secret_path=str(Path(os.environ.get('CANOPY_SECRETS_DIR', str(ROOT.parent/'CanopyOps-secrets'))).resolve()/'pg_reader')
     snapshot.write_text(json.dumps({'services':{'snapshot':{
         'image':image,'command':['python','-m','canopy.transfer','export-sqlite','--sqlite','/evidence/source.sqlite'],
         'environment':{'PGHOST':'postgres','PGDATABASE':'canopy','PGUSER':'canopy_reader','PGPASSWORD_FILE':'/run/secrets/pg_reader'},

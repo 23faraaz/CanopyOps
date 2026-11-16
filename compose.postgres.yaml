@@ -63,13 +63,13 @@ services:
 
 secrets:
   pg_admin:
-    file: ./.secrets/pg_admin
+    file: ${CANOPY_SECRETS_DIR:-../CanopyOps-secrets}/pg_admin
   pg_migrator:
-    file: ./.secrets/pg_migrator
+    file: ${CANOPY_SECRETS_DIR:-../CanopyOps-secrets}/pg_migrator
   pg_reader:
-    file: ./.secrets/pg_reader
+    file: ${CANOPY_SECRETS_DIR:-../CanopyOps-secrets}/pg_reader
   pg_writer:
-    file: ./.secrets/pg_writer
+    file: ${CANOPY_SECRETS_DIR:-../CanopyOps-secrets}/pg_writer
 
 volumes:
   postgres-data:

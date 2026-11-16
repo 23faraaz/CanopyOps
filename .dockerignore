@@ -30,3 +30,9 @@
 
 **/.secrets/
 **/backups/
+
+# Database exports are never source artifacts.
+**/*.sqlite*
+**/*.dump
+**/*.sql.gz
+**/*.backup

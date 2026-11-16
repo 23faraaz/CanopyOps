@@ -29,3 +29,9 @@ backups/
 
 /compose.override.yaml
 /compose.override.yaml.tmp
+
+# Database exports are never source artifacts.
+**/*.sqlite*
+**/*.dump
+**/*.sql.gz
+**/*.backup

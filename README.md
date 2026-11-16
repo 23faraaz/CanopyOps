@@ -536,3 +536,38 @@ gh workflow run risk-review.yml --repo 23faraaz/CanopyOps --ref main
 ```
 
 Validation: **37 pytest tests passed**, including seven deadline cases covering the 72-hour boundary, exact UTC expiry, post-expiry failure status, unchanged policy and absent approval. Syntax, Ruff lint/format, Hadolint, both workflow files' actionlint and quiet Compose validation passed. The existing deprecation warning remains. This stage changes no runtime image, application code, dependency lock or bound Compose configuration and does not invalidate or renew the existing acceptance. PR #1 established administrator-enforced PR/required-check protection before this workflow stage.
+
+## PostgreSQL monitoring failure evidence
+
+Completed on 16 November 2026 with `python3 scripts/verify_postgres_monitoring.py`, run `62094c7fd9f745dfbde89d6caa8af0fc`. This is an operator-run, isolated PostgreSQL monitoring drill, not an AWS failover or data-migration claim. It creates a newly named PostgreSQL volume and fresh disposable synthetic readings; it neither copies over nor substitutes for the actual migration-source dataset. The current live API must identify PostgreSQL before the drill starts.
+
+The controller verifies unique project/volume/network names, refuses original volume names and external networks, and initializes a random guarded database marker. It changes only its own labeled generator and telemetry network. All password files are supplied through existing runtime secret mounts; their contents are not opened or printed by the controller. Raw local diagnostic output stays ignored. Original PostgreSQL and SQLite volumes are never mounted into test tools.
+
+| Case | Evidence observed |
+| --- | --- |
+| Baseline | Four fresh stations, four telemetry series, PostgreSQL storage available and all **11** Grafana panel queries returned data through its datasource proxy |
+| Stop processing | Clone generator stopped cleanly with exit 0; persisted events remained **112 -> 112** while waiting for real staleness |
+| Stale readings | All four API stations became offline; minimum reading age **121.223 s**; observed paused interval **124.362 s**, including polling/command overhead |
+| Healthy website during stalled processing | Dashboard/static assets, liveness and readiness returned HTTP 200; Prometheus `up=1`, storage availability 1 and heartbeat age **4.438 s**, while reporting stations and latest-state changes were both zero |
+| Processing recovery | Explicit operator start restored generator progress (140 events observed) and four fresh stations |
+| Missing metrics | Disconnecting only the clone API's dedicated telemetry-alias network yielded `up=0`, zero station series and absent storage series in Grafana; API health/assets stayed HTTP 200 and persisted events increased **144 -> 196** |
+| Metrics recovery | Reconnecting the original clone telemetry address restored `up=1`, four series and four fresh stations |
+| Preservation | Same original API/generator/PostgreSQL container IDs and named-volume bindings before/after; no original-volume mounts in test tools |
+| Cleanup | Only the isolated project resources and test-image tag were removed |
+
+The extra telemetry network/alias is test instrumentation: it isolates a scrape-connectivity fault while leaving the clone API's ordinary database network working. It does not change the live networking configuration. The missing-metrics case demonstrates loss of the configured observation route, not a stopped exporter or database outage. No privileged firewall operation, host clock manipulation or timestamp rewriting was used.
+
+Grafana's storage panel is now backend-neutral (`Database readable`). Two additional panels distinguish **latest-state changes over one minute** from **telemetry station-series coverage**. The first counts timestamp changes observed at scrape times; it is not an exact processed-event count and may stay flat for duplicate/late events. The drill separately queries durable PostgreSQL event counts to establish stopped/continuing writes. Missing metrics are distinguished from a reported storage-availability value of zero. Historical nine-panel SQLite evidence above remains historical; the current dashboard has 11 panels.
+
+```bash
+# WSL, in the project checkout, using its existing Python environment:
+python3 scripts/verify_postgres_monitoring.py
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+```
+
+Safe counts, status, command/exit-code timestamps and limitations are under ignored `backups/monitoring-62094c7fd9f745dfbde89d6caa8af0fc/summary.json` and `commands.json`. This successful drill was run through WSL as the normal local operator. Python syntax, Ruff lint/format and all **37 tests** passed afterward; Hadolint, actionlint for both workflows and quiet Compose validation passed. No application module, runtime dependency lock, Dockerfile, accepted-risk policy or bound Compose file changed. The SQLite acceptance retains its original 23 November 00:00 UTC expiry and local-only scope.
+
+These probes are discrete observations, not a continuous-availability measurement. No alert rules, Alertmanager route or notification delivery were implemented or tested; query/dashboard visibility is the evidence here. Stopped processing required an explicit operator restart, so this is not automatic recovery or high availability. Environmental incident state is not recreated merely because data became stale. Before AWS, remaining preparation includes tested alert delivery, a backup restoration into a separate database, and a costed private-RDS/TLS/IAM/secrets/teardown design. Those remain separate stages; this work creates no AWS resources.
+
+Branch protection stage merged via [PR #1](https://github.com/23faraaz/CanopyOps/pull/1), main commit `375d76f`; deadline tracking merged via [PR #2](https://github.com/23faraaz/CanopyOps/pull/2), main commit `a772463`. Both passed the required `checks` job. The manually dispatched default-branch deadline/vendor review also [passed](https://github.com/23faraaz/CanopyOps/actions/runs/43891150031). Daily scheduling itself has not yet reached its first scheduled execution; it should not be described as an already observed cron run.

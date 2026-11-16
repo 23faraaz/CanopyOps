@@ -1,0 +1,29 @@
+{
+  "cves": [
+    "CVE-2026-119373",
+    "CVE-2026-119374",
+    "CVE-2026-119379"
+  ],
+  "approved_by": "23faraaz (project owner; explicit session risk acceptance)",
+  "approved_at": "2026-11-16T14:33:44.100539+00:00",
+  "expires_at": "2026-11-23T00:00:00Z",
+  "scope": {
+    "base_image": "python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89",
+    "architecture": "x86_64",
+    "dockerfile_sha256": "8fc4807c0f2d904e9f4b506a7e8ef040b7075bac3a533d113eec0e86eaf9683f",
+    "requirements_sha256": "22e68f017b4e8e56ff91d62f06550bfb92ad403ed124cfc845502c6e9c15f1ef",
+    "compose_sha256": "47c3c0ecb9b72a6c7afecd7a214e1aefb17d670d761859ac1e7785738e9d32bf",
+    "postgres_compose_sha256": "aafaacb798851aaffaf567fb67693778f359c7e13aef4edf71c5f79355ec8e90",
+    "application_sha256": "50765055d732b9f457a6d77f835528e03a551760e57b614385dde62a2fa22937",
+    "sqlite_package": "sqlite-libs=3.53.4-r0",
+    "sqlite_version": "3.53.4"
+  },
+  "rationale": "Temporary local synthetic-data project acceptance: FTS5 and session features are compiled in, but no application path uses FTS/MATCH, applies changesets or accepts arbitrary SQL/database uploads. This is risk acceptance, not a claim that SQLite is patched.",
+  "conditions": [
+    "Local synthetic-data project only; no AWS/production release authorization",
+    "Keep non-root, read-only root filesystem, dropped capabilities and no-new-privileges",
+    "No database uploads, arbitrary SQL, FTS tables, changeset processing or untrusted database imports",
+    "Any application code/schema, base, Dockerfile, runtime lock or SQLite package change invalidates acceptance",
+    "Recheck vendor fixes before expiry; fail closed at expiry; no automatic renewal"
+  ]
+}

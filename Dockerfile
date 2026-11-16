@@ -1,11 +1,9 @@
 # syntax=docker/dockerfile:1
-ARG PYTHON_IMAGE=python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+ARG PYTHON_IMAGE=python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
 
-# Apply the available Debian security fix once for compatible builder/runtime libraries.
+# Apply the available Alpine security fix once for compatible builder/runtime libraries.
 FROM ${PYTHON_IMAGE} AS base
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache zlib=1.4-r0 krb5-libs=1.22.3-r0
 
 FROM base AS builder
 WORKDIR /build
@@ -25,8 +23,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     METRICS_HOST=0.0.0.0 \
     METRICS_PORT=9100 \
     DATABASE_PATH=/data/canopy.db
-RUN groupadd --gid 10001 appuser \
-    && useradd --uid 10001 --gid 10001 --no-log-init --create-home appuser \
+RUN addgroup -g 10001 appuser \
+    && adduser -D -u 10001 -G appuser appuser \
     && mkdir /data \
     && chown appuser:appuser /data
 WORKDIR /app

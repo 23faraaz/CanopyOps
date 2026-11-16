@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from verify_docker import BASE, ROOT
+from image_policy import RUNTIME_PROBE, evaluate, scope
 
 HADOLINT = "hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d"
 ACTIONLINT = "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
@@ -176,7 +177,39 @@ def scan_checks():
                 indent=2,
             )
         )
+        runtime = json.loads(
+            subprocess.check_output(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "canopyops:local",
+                    "python",
+                    "-c",
+                    RUNTIME_PROBE,
+                ],
+                text=True,
+                cwd=ROOT,
+            )
+        )
+        acceptance = json.loads((ROOT / "security/sqlite-risk-acceptance.json").read_text())
+        summary = json.loads(evidence.read_text())
+        try:
+            policy = evaluate(runtime, acceptance, scope(ROOT, BASE, runtime))
+        except (ValueError, KeyError, TypeError) as exc:
+            summary["sqlite_policy_error"] = str(exc)
+            evidence.write_text(json.dumps(summary, indent=2))
+            raise RuntimeError("SQLite risk policy failed: " + str(exc)) from None
+        summary["sqlite_advisories"] = policy
+        evidence.write_text(json.dumps(summary, indent=2))
+        print("Known SQLite advisory gate: " + json.dumps(policy), flush=True)
         scan.check_returncode()
+        if policy["blocked_cves"]:
+            raise RuntimeError(
+                "Unaccepted known SQLite advisories remain; a clean Trivy report does not override them"
+            )
 
 
 def main():

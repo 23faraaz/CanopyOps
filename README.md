@@ -399,3 +399,72 @@ The supplied CI log for job `133340892451` shows a completed scan and **47 HIGH 
 `scripts/checks.py --only scan` now precreates the private cache directory and, on POSIX hosts, passes the caller's UID/GID to the Trivy container with `--user`. `HOME=/tmp` avoids relying on a root-only home directory. Windows Docker Desktop continues to use its Windows ACL behavior. No chmod 777, sudo cleanup, ignored cleanup errors or vulnerability exclusions were added. The strict HIGH/CRITICAL gate remains unchanged. An always-run CI step checks only scan-temp directory names and verifies none remain, even when the security gate fails.
 
 Verified with the actual scan under WSL as UID/GID **1000:1000**: 47 HIGH findings, scan exit 1 preserved, no newly retained scan temporary directory and no cleanup PermissionError. Safe evidence is in ignored `backups/scan-cleanup-linux.json`. The controller's original failure remained `CalledProcessError`; the regression wrapper confirmed that expected failure and successful cleanup. Syntax, Ruff lint/format, dependency consistency and all 14 pytest tests passed afterward (one existing deprecation warning). No credentials, original database volumes or application runtime dependencies changed.
+
+## CVE applicability review: 16 November 2026
+
+Scope: the existing Linux/amd64 API image (`canopyops:local`), Python 3.12.16, SQLite/local and PostgreSQL application paths. The last actual scan reported **47 HIGH binary-package findings across 11 distinct CVEs**. Debian often tracks vulnerabilities at source-package level: four util-linux CVEs each appear against nine installed binary packages, which accounts for 36 findings. A source-package match does not prove every binary contains the affected component. Conversely, an unused feature is not a patched library.
+
+This review does **not** add an exception, change the severity gate, claim exploit resistance, or authorize a production release. `--scanners vuln --severity HIGH,CRITICAL --exit-code 1` and `scan.check_returncode()` remain enabled. The findings remain blocking. No destructive proof-of-concept was run.
+
+### Stable package and base-image checks
+
+Checked the configured Trixie and Trixie-security repositories using a disposable container with `apt-get update` and `apt-cache policy`. Candidate versions for the remaining source families match the installed vulnerable versions:
+
+| Binary package checked | Installed/candidate in Trixie |
+| --- | --- |
+| util-linux | 2.41.5-0+deb13u1 |
+| libacl1 | 2.3.2-2+b1 |
+| ncurses-bin | 6.5+20250216-2 |
+| libsqlite3-0 | 3.46.1-7+deb13u2 |
+| libsystemd0, libudev1 | 257.13-1~deb13u1 |
+| perl-base | 5.40.1-6+deb13u1 |
+
+The image already contains the available zlib security update, `1:1.3.dfsg+really1.3.1-1+deb13u1`; its two previously reported findings were removed in the earlier verified scan. The fresh package-policy probe used the unmodified upstream base, so it correctly showed that update as available there rather than already installed. No newer Trixie fixes for the remaining 11 CVEs were offered by the configured repositories at review time.
+
+Official registry checks resolved both `python:3.12-slim` and `python:3.12-slim-trixie` to the currently pinned `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`. Rebuilding that digest alone cannot supply a new base release. `python:3.12-slim-bookworm` resolved to `sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df`. Debian marks Bookworm not affected by three of these util-linux CVEs, but still vulnerable to the fourth, ACL, ncurses, SQLite, systemd and Perl CVEs. A Bookworm tag is therefore not a complete remediation; that alternative image was not built, tested or scanned in this review. The Dockerfile base remains unchanged.
+
+Debian lists fixes in unstable/testing for the CVEs below. Mixing those packages into this stable image would introduce a different dependency/ABI and maintenance problem, particularly the new ACL ABI. No unstable repository, hand-built system library, package removal or base-family change was introduced. Revisit an official stable update first, and test both build stages, locked dependencies and application behavior before adopting a changed base.
+
+### Runtime and code evidence
+
+Image-only inspection ran as UID/GID 10001 with a read-only root filesystem, all capabilities dropped and no-new-privileges, matching the current Compose API hardening. Observed `CapEff=0` and `NoNewPrivs=1` belong to that hardened invocation; they are not an unconditional property of arbitrary `docker run` commands. The image still has a setuid `mount` binary. The default image `/etc/fstab` contains zero active entries. No database volumes, secrets or original database files were mounted or inspected.
+
+`mount`, `nsenter`, `infocmp` and Perl are installed. `systemd-homed` was absent from PATH and the checked `/usr/lib/systemd/systemd-homed` and `/lib/systemd/systemd-homed` paths. Perl explicitly reported `Can't locate Archive/Tar.pm` when asked to load `Archive::Tar`. SQLite reports version 3.46.1 with **ENABLE_FTS5 and ENABLE_SESSION compiled in**. Those extensions must not be described as absent. SQL feature probes used only an in-memory database.
+
+Source inspection of `canopy/` found no subprocess/shell execution, libacl calls, FTS/MATCH usage, changeset APIs, tar extraction or curses invocation. `canopy/storage.py` creates ordinary events/states tables and uses bound values; the API exposes fixed station/history views rather than arbitrary SQL, database uploads or archive input. Transfer code preserves trusted application records and does not add FTS tables. These are current code-path observations, not a guarantee against every future code-execution or malicious-file scenario. The SQS worker remains an unverified future integration and is not covered by a deployed-cloud applicability claim.
+
+### Individual decisions
+
+Each CVE links directly to its Debian record. Fixed versions below are **Debian unstable source versions**, not available Trixie security candidates. All 11 records still list Trixie as vulnerable at review time.
+
+| CVE | Source family (binary findings) | Debian fix/status | CanopyOps applicability and decision |
+| --- | --- | --- | --- |
+| [CVE-2026-76642](https://security-tracker.debian.org/tracker/CVE-2026-76642) | util-linux (9) | Fixed in unstable 2.42.3-1; no Trixie candidate fix | Privileged post-mount hooks can run after a helper fails. Mount tooling is present, but the application never runs it; the hardened service has no effective capabilities, no privilege gains and no active image fstab entries. Reduced exposure depends on those controls. Installed affected source version; retain blocking finding. |
+| [CVE-2026-78408](https://security-tracker.debian.org/tracker/CVE-2026-78408) | util-linux (9) | Fixed in unstable 2.42.4-1; Trixie no-DSA/minor note | A privileged `nsenter --join-cgroup` invocation can leak a cgroup descriptor across credential changes. `nsenter` exists, but no application or startup path invokes it and no privileged operator action is part of the API flow. Reassess debug/operator tooling changes; retain blocking finding. |
+| [CVE-2026-78409](https://security-tracker.debian.org/tracker/CVE-2026-78409) | util-linux (9) | Fixed in unstable 2.42.3-1; no Trixie candidate fix | `X-mount.subdir` resolution can escape through intermediate symlinks on qualifying kernels. No authorized fstab entry or application mount operation exists in the inspected image. Kernel versions and mount policies can change; do not infer universal safety. Retain blocking finding. |
+| [CVE-2026-78410](https://security-tracker.debian.org/tracker/CVE-2026-78410) | util-linux (9) | Fixed in unstable 2.42.3-1; Bookworm also vulnerable | Restricted bind-mount sources can be replaced before a privileged mount and ownership/mode hook. Current code does no mounting; the inspected image has no active fstab entry and Compose prevents privilege gains. Setuid mount remains installed, so changing runtime controls invalidates this assessment. Retain blocking finding. |
+| [CVE-2026-54369](https://security-tracker.debian.org/tracker/CVE-2026-54369) | acl (1) | Fixed in unstable 2.4.0-1; Debian plans a point-release update rather than individual backports | Path-based ACL operations can follow attacker-controlled symlinks when called with privilege. libacl1 is installed; the app has no ACL-management path and executes as a non-root user. No claim that the installed library is fixed. Track the stable update and retain blocking finding. |
+| [CVE-2025-69720](https://security-tracker.debian.org/tracker/CVE-2025-69720) | ncurses (4) | Fixed in unstable 6.6+20251231-1; Trixie no-DSA/minor note | A crafted input to `infocmp` can overflow its analysis buffer. That CLI is installed, but the HTTP API/generator do not execute it or accept terminfo files. Low observed application reachability; no binary removal or exemption. Retain blocking finding. |
+| [CVE-2026-119373](https://security-tracker.debian.org/tracker/CVE-2026-119373) | sqlite3 (1) | Fixed in unstable 3.54.1-1; no Trixie candidate fix | FTS5 prefix matching with detail=none and negative rowids can corrupt memory. FTS5 is compiled in, but CanopyOps creates no FTS tables and issues no MATCH queries. Affected library is actively used for supported SQLite operation; absence of this query path reduces current exposure, not patch urgency. Retain blocking finding. |
+| [CVE-2026-119374](https://security-tracker.debian.org/tracker/CVE-2026-119374) | sqlite3 (1) | Fixed in unstable 3.54.1-1; no Trixie candidate fix | Deletion from a corrupt FTS5 index can trigger an overflow in its secure-delete path. The app accepts no uploaded databases and has no FTS5 schema. FTS5 and secure-delete support exist in the linked library; do not disable generic secure-delete or call the library unaffected. Retain blocking finding. |
+| [CVE-2026-119379](https://security-tracker.debian.org/tracker/CVE-2026-119379) | sqlite3 (1) | Fixed in unstable 3.54.1-1; no Trixie candidate fix | Crafted session changesets can overflow the changeset application path. ENABLE_SESSION is compiled in; application code does not call changeset APIs or accept changesets. Reassess any future sync/import/native-extension work. Retain blocking finding. |
+| [CVE-2026-16742](https://security-tracker.debian.org/tracker/CVE-2026-16742) | systemd (2) | Fixed in unstable 261.2-1; Trixie no-DSA/minor note | The described escalation requires systemd-homed managing a logged-in local user. The homed daemon is absent at the checked locations and the service runs Python, with no homed account workflow. This is evidence of an absent affected component for this image, while libsystemd0/libudev1 source-package findings remain. No scanner exception added. |
+| [CVE-2026-9538](https://security-tracker.debian.org/tracker/CVE-2026-9538) | perl (1) | Fixed in unstable 5.42.3-1; Trixie postponed/minor note | Archive::Tar can allocate excessive memory from crafted tar headers. Perl is installed, but the affected Archive::Tar module cannot be loaded and the app performs no Perl/archive processing. Affected component absence is supported for this tested image; adding Perl modules or archive features invalidates it. No scanner exception added. |
+
+Debian's minor/no-DSA/postponed notes and Trivy's HIGH severities reflect different assessments. Neither a lower vendor assessment nor unused functionality silently overrides this project's chosen gate. This review contains no exploit attempt or complete dynamic reachability proof. Do not generalize these observations to a privileged container, new uploads, arbitrary SQL, a changed image or the future AWS deployment.
+
+### Recheck commands and evidence
+
+```bash
+# Resolve the currently published digest; compare with the Dockerfile pin.
+docker buildx imagetools inspect python:3.12-slim
+# Inspect stable candidates inside a disposable, unmodified upstream base.
+docker run --rm python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b sh -ec \
+  'apt-get update >/tmp/apt-review.log 2>&1; apt-cache policy util-linux libacl1 ncurses-bin libsqlite3-0 libsystemd0 libudev1 perl-base zlib1g'
+# Current gate: an exit of 1 with the reported findings remains an expected failure.
+python3 scripts/checks.py --only scan
+```
+
+Safe local evidence: `backups/checks-summary.json`, `backups/runtime-cve-review.json` and `backups/base-digests-review.jsonl`. The runtime inspection collected package/source versions, executable presence, SQLite compile options and hardening metadata only; raw data and secret files were not accessed. The latest package/base checks are dated above; the finding counts refer to the last completed scan, not a claimed new scan during this documentation review. No application code, image dependency, ignore file or CI gate changed, so application tests were not rerun for this documentation-only change.
+
+Disposition owner: CanopyOps maintainer. Recheck by **23 November 2026**, or immediately after a base/package, runtime-permission, SQL, import or operator-tooling change. This is a review deadline, not an exception expiry. Any later proposed exception must identify the exact CVE/package/image digest, supporting applicability evidence, remaining exposure, compensating controls, named reviewer and an absolute expiry, and needs CI enforcement of that expiry before use. No blanket ignore-unfixed setting or unbounded exception is approved by this review. Until fixes or separately reviewed exceptions exist, the strict security gate stays failing and release readiness remains blocked.

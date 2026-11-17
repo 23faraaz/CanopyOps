@@ -49,3 +49,8 @@
 !scripts/
 !scripts/recovery/
 !scripts/recovery/ledger.py
+
+!analytics/
+!analytics/*.py
+!docker/analytics/
+!docker/analytics/Dockerfile

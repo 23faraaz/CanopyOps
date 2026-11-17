@@ -1,0 +1,21 @@
+# Merge after base and PostgreSQL; analytics uses reader permissions only.
+services:
+  analytics:
+    image: canopyops-analytics:local
+    build: {context: ., dockerfile: docker/analytics/Dockerfile}
+    profiles: [analytics]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: canopy
+      PGUSER: canopy_reader
+      PGPASSWORD_FILE: /run/secrets/pg_reader
+    secrets: [pg_reader]
+    ports: ["127.0.0.1:${ANALYTICS_PORT:-8002}:8081"]
+    expose: ["9100"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 30s

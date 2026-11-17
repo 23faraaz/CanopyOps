@@ -43,8 +43,8 @@ def python_checks():
         "sh",
         "-ec",
         "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
-        "python --version; python -m pip check; python -m compileall -q canopy ingestion scripts tests; python -m ruff check canopy ingestion scripts tests; "
-        "python -m ruff format --check canopy ingestion scripts tests; "
+        "python --version; python -m pip check; python -m compileall -q canopy ingestion analytics scripts tests; python -m ruff check canopy ingestion analytics scripts tests; "
+        "python -m ruff format --check canopy ingestion analytics scripts tests; "
         "python -m pytest -q -p no:cacheprovider --basetemp /tmp/canopy-tests",
     )
 
@@ -141,6 +141,39 @@ def configuration_checks():
         "/Dockerfile",
     )
     run("docker", "build", "-t", "canopyops-queue:local", str(ROOT / "monitoring/queue"))
+    run(
+        "docker",
+        "compose",
+        "-f",
+        str(ROOT / "compose.yaml"),
+        "-f",
+        str(ROOT / "compose.postgres.yaml"),
+        "-f",
+        str(ROOT / "compose.analytics.yaml"),
+        "--profile",
+        "analytics",
+        "config",
+        "--quiet",
+    )
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'docker/analytics/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
+    )
+    run(
+        "docker",
+        "build",
+        "-t",
+        "canopyops-analytics:local",
+        "-f",
+        str(ROOT / "docker/analytics/Dockerfile"),
+        str(ROOT),
+    )
     prometheus = re.search(
         r"image: (prom/prometheus:\S+)", (ROOT / "compose.yaml").read_text()
     ).group(1)
@@ -325,6 +358,7 @@ def scan_checks():
             ("canopyops-alertmanager:local", "alertmanager_scan"),
             ("canopyops-ingestion:local", "ingestion_scan"),
             ("canopyops-queue:local", "queue_emulator_scan"),
+            ("canopyops-analytics:local", "analytics_scan"),
         ]:
             run("docker", "save", "-o", str(archive), image)
             extra_scan = run(

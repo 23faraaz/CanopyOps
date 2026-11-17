@@ -54,3 +54,5 @@
 !analytics/*.py
 !docker/analytics/
 !docker/analytics/Dockerfile
+
+!requirements-analytics.txt

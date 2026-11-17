@@ -1,0 +1,27 @@
+# Optional local cache only; no published Redis port or persistent cache data.
+services:
+  analytics:
+    environment:
+      REDIS_HOST: redis
+      CACHE_TTL_SECONDS: "10"
+  redis:
+    image: redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335
+    profiles: [analytics]
+    user: "10001:10001"
+    command: [redis-server, --bind, 0.0.0.0, --protected-mode, "no", --save, "", --appendonly, "no", --dir, /tmp, --maxmemory, 16mb, --maxmemory-policy, allkeys-lru]
+    expose: ["6379"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/data:rw,noexec,nosuid,size=1m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    pids_limit: 64
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}

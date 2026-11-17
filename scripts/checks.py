@@ -174,6 +174,27 @@ def configuration_checks():
         str(ROOT / "docker/analytics/Dockerfile"),
         str(ROOT),
     )
+    run(
+        "docker",
+        "compose",
+        "-f",
+        str(ROOT / "compose.yaml"),
+        "-f",
+        str(ROOT / "compose.postgres.yaml"),
+        "-f",
+        str(ROOT / "compose.analytics.yaml"),
+        "-f",
+        str(ROOT / "compose.cache.yaml"),
+        "--profile",
+        "analytics",
+        "config",
+        "--quiet",
+    )
+    run(
+        "docker",
+        "pull",
+        "redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335",
+    )
     prometheus = re.search(
         r"image: (prom/prometheus:\S+)", (ROOT / "compose.yaml").read_text()
     ).group(1)
@@ -359,6 +380,10 @@ def scan_checks():
             ("canopyops-ingestion:local", "ingestion_scan"),
             ("canopyops-queue:local", "queue_emulator_scan"),
             ("canopyops-analytics:local", "analytics_scan"),
+            (
+                "redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335",
+                "redis_scan",
+            ),
         ]:
             run("docker", "save", "-o", str(archive), image)
             extra_scan = run(

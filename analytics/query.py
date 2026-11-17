@@ -84,13 +84,14 @@ def calculate(kind, window):
     with connect() as db:
         db.execute("SET TRANSACTION READ ONLY")
         db.execute("SET LOCAL statement_timeout='5s'")
+        generated = datetime.now(timezone.utc)
         rows = db.execute(
             sql, (window.start, window.end, window.station_id, window.station_id)
         ).fetchall()
     result = {
         "kind": kind,
         "window": window.metadata(),
-        "generated_at": iso(datetime.now(timezone.utc)),
+        "generated_at": iso(generated),
         "data_through": iso(max(row[-1] for row in rows)) if rows else None,
     }
     if kind == "hourly":

@@ -6,6 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Response
 from prometheus_client import Counter, Histogram, start_http_server
 from analytics.query import Window, calculate
+from analytics.cache import configured_cache, age
+
+CACHE = configured_cache()
+CACHE_EVENTS = Counter(
+    "canopy_analytics_cache_total", "Cache lookup and write outcomes", ["outcome"]
+)
 
 QUERIES = Counter(
     "canopy_analytics_queries_total", "Analytics database query outcomes", ["kind", "outcome"]
@@ -49,11 +55,27 @@ def respond(kind, start, end, station_id, response):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     response.headers["Cache-Control"] = "no-store"
+    cached, status, can_write = CACHE.lookup(kind, window)
+    CACHE_EVENTS.labels(status).inc()
+    if cached is not None:
+        return {
+            **cached,
+            "source": "redis",
+            "cache_age_seconds": round(age(cached), 3),
+            "cache_ttl_seconds": CACHE.ttl,
+        }
     try:
         with LATENCY.labels(kind).time():
             result = calculate(kind, window)
         QUERIES.labels(kind, "success").inc()
-        return {**result, "source": "postgres"}
+        if can_write:
+            CACHE_EVENTS.labels(CACHE.store(kind, window, result)).inc()
+        return {
+            **result,
+            "source": "postgres",
+            "cache_age_seconds": round(age(result), 3),
+            "cache_ttl_seconds": CACHE.ttl,
+        }
     except Exception:
         QUERIES.labels(kind, "failed").inc()
         raise HTTPException(503, "Analytics query unavailable") from None

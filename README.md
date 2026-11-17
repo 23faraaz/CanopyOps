@@ -769,3 +769,54 @@ curl --get http://127.0.0.1:8002/analytics/thresholds --data-urlencode 'start=20
 Verified on 17 November 2026, isolated run **`fda42e73282b47289d17ba30e7883e26`**: six fixtures seeded, four included within the window, three hourly buckets, two high-temperature observations, two low-soil observations and three breaching either threshold (**75%** overall). A late fifth in-window observation changed the result to **60%**, increased the first hourly count from two to three and yielded soil mean **26.333**. Timezone-equivalent windows matched; start/end boundaries, station filters, empty results and invalid-input rejection passed. Three forbidden reader write/schema actions returned SQLSTATE42501. During clone database interruption, liveness stayed 200 while readiness/query returned503; restart restored correct results. Metrics were reachable only internally and graceful exit was0. Original container IDs/volume bindings were unchanged; only isolated test resources were removed. Evidence stays ignored under `backups/analytics-fda42e73282b47289d17ba30e7883e26/`.
 
 All **63 Python tests**, syntax/Ruff including analytics, Dockerfile/workflow/Compose checks and existing alert rule fixtures passed. The isolated real-PostgreSQL arithmetic test remains operator-run, distinct from CI unit fixtures. Existing SQLite risk scope/expiry is unchanged. This uncached calculation baseline is committed separately before Redis; no live analytics activation, frontend chart integration, Redis behavior, AWS deployment or cost-saving claim is implied.
+
+## Redis cache: verified after the analytics calculation baseline
+
+The uncached analytics baseline was merged separately through [PR #7](https://github.com/23faraaz/CanopyOps/pull/7), commit `339be27`. Redis is now an **optional historical-query cache**, not an authority for readings, incident state, deduplication, readiness or migration validation. The original current-state dashboard and ingestion write path do not use it. `requirements-analytics.txt` adds hash-locked redis-py **8.1.0** to the existing constrained application dependencies; it changes no API/worker dependency lock. The official Redis **7.2.17** image is pinned by digest and scanned independently in CI.
+
+Cache keys include a schema version, endpoint kind and canonical UTC window/station filter. Bodies are JSON, limited to1MiB; no pickle or arbitrary deserialization is used. A result expires **10 seconds after query start**, including query duration, rather than ten seconds after every cache hit. Hits retain the original `generated_at` and do not write/extend TTL. Redis TTL is shortened by query age, and application-side age checks reject expired/future/schema-mismatched results even if a Redis key survives slightly longer. Late arrivals can therefore remain absent until expiry; they appear after PostgreSQL recalculation. Empty results use the same bounded policy. Responses expose source, generated time, data-through timestamp and rounded cache age, and retain `Cache-Control: no-store` to avoid an additional browser cache.
+
+Redis lookup failure falls back to PostgreSQL and suppresses an extra cache-write attempt for that request. Cache-write failure still returns the successful database result. Socket connect/read timeouts are0.2s, SDK retries are disabled, and an additional **0.3s optional-call waiting budget** covers DNS resolution too. A pool plus nonblocking semaphore allows at most **two outstanding cache operations**, including timed-out background calls; no unbounded queue accumulates. Timed-out socket/DNS operations may finish afterward, so the deadline bounds caller waiting rather than forcibly cancelling system DNS. A cache miss can involve separate lookup/write waits plus PostgreSQL connection/query time;0.3s is not a whole-request SLO or a guaranteed outage recovery time. This baseline is not load-tested and has no single-flight cache-miss suppression.
+
+`compose.cache.yaml` opts in after the analytics overlay. Redis has no published host port, no persistent volume, disabled RDB/AOF persistence,16MiB maxmemory with allkeys-lru eviction, a64MiB container limit, bounded local logs and tmpfs. Both added services run non-root with read-only rootfs and dropped capabilities. The cache deliberately contains disposable aggregate results. This credential-free plaintext Redis configuration is for the trusted local synthetic-data Docker network only; protected mode is explicitly disabled for container-to-container access. AWS requires a separately reviewed private ElastiCache TLS/authentication/security-group configuration. No static AWS credentials or Redis password is baked into an image. Existing PostgreSQL passwords stay in their external runtime files.
+
+```bash
+# Full real-Redis/PostgreSQL drill in a NEW guarded disposable project:
+python3 scripts/verify_analytics.py --cache
+# Baseline remains independently runnable with cache disabled:
+python3 scripts/verify_analytics.py
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+python3 scripts/checks.py --only scan
+
+# Build then add ONLY the two new services against the existing local DB:
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml -f compose.cache.yaml --profile analytics build analytics
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml -f compose.cache.yaml --profile analytics up -d --no-deps --no-build --wait analytics redis
+# Explore endpoints and supply explicit date bounds:
+# http://127.0.0.1:8002/docs
+```
+
+### Cache acceptance evidence
+
+Final isolated run **`09de489e6c2f4aff87eaa61775a57511`**,17 November2026, passed with successful cleanup. Safe summaries/command exit codes remain ignored in `backups/analytics-09de489e6c2f4aff87eaa61775a57511/`.
+
+| Case | Observed result |
+| --- | --- |
+| Cold query/repeat | PostgreSQL then Redis, with exactly **one** successful threshold SQL query and unchanged generation time on hits |
+| Late arrival | Cached count stayed4 before expiry, refreshed to5 and60% afterward; one additional SQL refresh;9.598s observed wait from the post-insert check, not the full TTL |
+| Redis stopped | Correct PostgreSQL response with5 observations; readiness200; one measured request **0.377s** |
+| Redis recovery | PostgreSQL then Redis responses, correct data retained |
+| Corrupt cached JSON | PostgreSQL fallback, then a valid replacement cache hit |
+| Memory pressure | Configured16,777,216-byte limit/allkeys-lru verified; **319 evictions**, with correct analytics results afterward |
+| PostgreSQL stopped | Cached response200 at age4.221s while fresh readiness503; query503 after absolute expiry; cold query503 and liveness200 |
+| PostgreSQL recovery | Correct5-observation/60% result restored |
+| Permissions/shutdown | Three reader write/schema actions denied; graceful analytics exit0 |
+| Isolation | Original API/generator/PostgreSQL IDs and volume bindings unchanged; no original-volume mounts; isolated test resources removed |
+
+An earlier cache drill observed **5.105s** fallback despite socket timeouts: Docker DNS resolution was outside their scope. The bounded optional-call fix and a regression test were added, then the final real outage measurement above was taken. These are individual controlled observations, not a latency distribution, benchmark guarantee or cost-saving claim. An initial unquoted tmpfs YAML list failed before Redis creation; quoting was corrected and only that diagnosed disposable project was removed after label/volume guards. Its failure evidence remains local.
+
+All **74 Python tests** and syntax/Ruff/configuration checks passed. The strict HIGH/CRITICAL gate passed for all **six** images, including analytics and Redis; no exception was added. The original API's known SQLite risks remain separately tracked with unchanged23 November2026 00:00UTC local-only expiry. Unit tests cover canonical cache keys, invalid/expired/future results, query-time TTL consumption, failure handling and the bounded-call deadline/capacity. Actual Redis expiry/outage/eviction tests are operator-run, not claimed as CI coverage. Worker/analytics/cache scraping, Grafana panels, cloud TLS/IAM and production load/failover remain later stages.
+
+After those local checks, analytics and its cache were additively activated against the **existing** local PostgreSQL reader role using `--no-deps`: no API/generator/database recreation or source-data replacement. At11:37UTC a fixed one-hour query returned **840 persisted observations**, first from PostgreSQL then Redis. `/docs`, both analytics health endpoints and the original localhost8001 dashboard/health checks returned200. Redis remained unpublished. Original container IDs/volume bindings matched. Safe activation evidence is ignored in `backups/analytics-local-activation.json`. The queue transport remains opt-in; this activation does not switch the original direct-writing generator. The original website has not acquired frontend charts; localhost8002 exposes the analytics API and its interactive documentation.
+
+For migrations, restores or backend switches, verify source/target data directly in PostgreSQL with caching disabled or a fresh namespace. A cache hit is not evidence of a successful restore. Stopping/removing Redis discards only cached aggregates; PostgreSQL remains the source of truth. Redis deployment here is local, not ElastiCache, AWS high availability or zero-downtime deployment evidence.

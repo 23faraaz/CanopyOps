@@ -10,8 +10,8 @@ RUN apk --no-network info --depends .python-rundeps 2>/dev/null | sed -n '/^so:/
 FROM base AS builder
 WORKDIR /build
 RUN python -m venv /opt/venv
-COPY requirements.txt ./
-RUN /opt/venv/bin/pip install --require-hashes --only-binary=:all: -r requirements.txt
+COPY requirements-analytics.txt ./
+RUN /opt/venv/bin/pip install --require-hashes --only-binary=:all: -r requirements-analytics.txt
 FROM base AS runtime
 ENV PATH="/opt/venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 METRICS_HOST=0.0.0.0 METRICS_PORT=9100
 RUN addgroup -g 10001 appuser \

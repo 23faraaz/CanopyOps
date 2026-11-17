@@ -1,0 +1,3 @@
+-c requirements.txt
+-r requirements.in
+redis>=6,<9

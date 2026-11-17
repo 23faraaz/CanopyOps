@@ -1,6 +1,7 @@
 """Verify historical analytics in guarded fresh volumes; preserve live data."""
 
 import json
+import argparse
 import subprocess
 import time
 import uuid
@@ -10,11 +11,19 @@ from verify_docker import ROOT
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--cache",
+        action="store_true",
+        help="Verify Redis hits, real expiry, failures and memory bounds",
+    )
+    cache_enabled = parser.parse_args().cache
     run_id = uuid.uuid4().hex
     project = "canopyanalytics" + run_id[:10]
     folder = ROOT / "backups" / ("analytics-" + run_id)
     folder.mkdir(parents=True, mode=0o700)
     report = {
+        "cache_enabled": cache_enabled,
         "run_id": run_id,
         "project": project,
         "status": "running",
@@ -93,7 +102,7 @@ def main():
     ports: !override
       - "127.0.0.1::8081"
   probe:
-    image: canopyops-ingestion:local
+    image: canopyops-analytics:local
     profiles: [tools]
     entrypoint: [python, /checks/analytics_probe.py]
     environment:
@@ -133,6 +142,10 @@ def main():
         "analytics",
     ]
 
+    if cache_enabled:
+        position = compose.index(str(overlay)) - 1
+        compose[position:position] = ["-f", str(ROOT / "compose.cache.yaml")]
+
     def dc(*args, **kwargs):
         return execute(*compose, *args, **kwargs)
 
@@ -171,6 +184,17 @@ def main():
         dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "postgres")
         dc("run", "--rm", "--no-deps", "-T", "migration", "python", "-m", "canopy.migrate")
         actor("seed")
+        if cache_enabled:
+            dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "redis")
+            redis_id = dc("ps", "-q", "redis").strip()
+            redis_info = json.loads(execute("docker", "inspect", redis_id))[0]
+            assert redis_info["Config"]["Labels"]["com.docker.compose.project"] == project
+            assert (
+                redis_info["Config"]["User"] == "10001:10001"
+                and redis_info["HostConfig"]["ReadonlyRootfs"]
+            )
+            assert not redis_info["HostConfig"]["PortBindings"]
+
         dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "analytics")
         identifier = dc("ps", "-q", "analytics").strip()
         info = json.loads(execute("docker", "inspect", identifier))[0]
@@ -181,10 +205,25 @@ def main():
         code = "from canopy.postgres import connect; d=connect(); assert d.execute('SELECT current_user').fetchone()[0]=='canopy_reader'; denied=0\nfor sql in ['DELETE FROM canopy.events WHERE false','UPDATE canopy.states SET payload=payload WHERE false','CREATE TABLE canopy.forbidden(id int)']:\n try: d.execute(sql)\n except Exception as e: assert e.sqlstate=='42501'; denied+=1; d.rollback()\nassert denied==3; d.close(); print(denied)"
         assert dc("exec", "-T", "analytics", "python", "-c", code).strip() == "3"
         report["forbidden_database_actions"] = 3
-        actor("late")
-        report["late_reading"] = actor("after-late")
+        if cache_enabled:
+            dc("exec", "-T", "redis", "redis-cli", "FLUSHDB")
+            report["cache_hits_and_expiry"] = actor("cache-late")
+            report["late_reading"] = actor("after-late")
+            dc("stop", "-t", "15", "redis")
+            report["redis_failure"] = actor("cache-fallback")
+            dc("up", "-d", "--no-build", "--wait", "redis")
+            report["redis_recovery"] = actor("cache-recovered")
+            report["cache_corruption"] = actor("cache-corrupt")
+            report["memory_bound"] = actor("cache-eviction")
+            dc("exec", "-T", "redis", "redis-cli", "FLUSHDB")
+            actor("cache-warm")
+        else:
+            actor("late")
+            report["late_reading"] = actor("after-late")
         validate()
         dc("stop", "-t", "30", "postgres")
+        if cache_enabled:
+            report["bounded_cache_during_database_failure"] = actor("cached-database-failure")
         report["database_failure"] = actor("unavailable")
         dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "90", "postgres")
         report["database_recovery"] = actor("after-late")

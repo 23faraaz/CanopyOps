@@ -820,3 +820,29 @@ All **74 Python tests** and syntax/Ruff/configuration checks passed. The strict 
 After those local checks, analytics and its cache were additively activated against the **existing** local PostgreSQL reader role using `--no-deps`: no API/generator/database recreation or source-data replacement. At11:37UTC a fixed one-hour query returned **840 persisted observations**, first from PostgreSQL then Redis. `/docs`, both analytics health endpoints and the original localhost8001 dashboard/health checks returned200. Redis remained unpublished. Original container IDs/volume bindings matched. Safe activation evidence is ignored in `backups/analytics-local-activation.json`. The queue transport remains opt-in; this activation does not switch the original direct-writing generator. The original website has not acquired frontend charts; localhost8002 exposes the analytics API and its interactive documentation.
 
 For migrations, restores or backend switches, verify source/target data directly in PostgreSQL with caching disabled or a fresh namespace. A cache hit is not evidence of a successful restore. Stopping/removing Redis discards only cached aggregates; PostgreSQL remains the source of truth. Redis deployment here is local, not ElastiCache, AWS high availability or zero-downtime deployment evidence.
+
+## Current local layout and endpoint verification
+
+On17 November2026, `python3 scripts/verify_local_endpoints.py` passed against the running `canopyops` project. The current application layout remains `canopy/`, `ingestion/` and `analytics/`, with the API Dockerfile at the root and separate ingestion/analytics Dockerfiles under `docker/`. The proposed `infra/` layout and an `app/` relocation have not been implemented; this evidence does not claim they were tested. The verifier checks required paths and actual startup commands before checking HTTP responses.
+
+| Check | Observed result |
+| --- | --- |
+| Original API, localhost8001 | Dashboard, JS/CSS, docs/OpenAPI, both health endpoints, PostgreSQL backend identity, four station histories and overview passed |
+| Analytics, localhost8002 | Docs/OpenAPI, both health endpoints, hourly and threshold queries, station filtering and invalid-input rejection passed |
+| Historical consistency/cache | Stable one-hour window ending10s before the probe: **1,996 observations**, eight hourly buckets; bucket counts matched threshold totals; PostgreSQL then Redis returned identical totals/generation time |
+| Processing/data freshness | Durable events **32,480 -> 32,484**, unique IDs, four stations with latest readings <=120s old |
+| Private infrastructure | Database, Redis, Prometheus and application metrics ports unpublished; API/analytics/Grafana publication restricted to127.0.0.1 |
+| Monitoring/cache | Internal API/analytics metrics readable, Prometheus API scrape up1, Grafana database ok, Redis PONG |
+| Preservation | Same container IDs and named-volume bindings before/after; no service lifecycle operations, SQL writes or failure injection issued |
+
+This operator check uses HTTP GET, Docker metadata, normal read-only database authentication and Redis PING. Normal generator writes and cache fills continue. It neither opens `.env`/host secret files nor prints raw histories, password values or connection strings. Summaries stay ignored under `backups/local-endpoints-324b0eed16824d4d996c5f11d9c11a44/`. It targets the current direct-writing-generator local stack; queue-worker activation remains a separate choice. These are discrete HTTP/data checks, not a browser-rendering or continuous-availability measurement.
+
+```bash
+# WSL, current checkout:
+cd /mnt/c/Users/faraa/projects/CanopyOps
+python3 scripts/verify_local_endpoints.py
+# Optional if you deliberately use a different Compose project name:
+python3 scripts/verify_local_endpoints.py --project canopyops
+```
+
+This live-stack check is operator-run; CI has no live database credentials or running project. Existing CI separately builds the repository's Dockerfiles, runs application/unit checks and disposable container verification, and keeps its strict image gate. No runtime application code or accepted-risk scope was changed by adding this verifier.

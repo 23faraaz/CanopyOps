@@ -9,7 +9,7 @@ FROM base AS builder
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-COPY requirements.txt .
+COPY app/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --require-hashes --only-binary=:all: -r requirements.txt
 
@@ -29,7 +29,7 @@ RUN addgroup -g 10001 appuser \
     && chown appuser:appuser /data
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
-COPY canopy/ ./canopy/
+COPY app/canopy/ ./canopy/
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

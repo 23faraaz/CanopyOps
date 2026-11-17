@@ -87,18 +87,18 @@ def main():
     try:
         required = [
             "Dockerfile",
-            "canopy/api.py",
-            "ingestion/worker.py",
-            "analytics/api.py",
+            "app/canopy/api.py",
+            "app/ingestion/worker.py",
+            "app/analytics/api.py",
             "docker/ingestion/Dockerfile",
             "docker/analytics/Dockerfile",
-            "requirements.txt",
-            "requirements-queue.txt",
-            "requirements-analytics.txt",
+            "app/requirements.txt",
+            "app/requirements-queue.txt",
+            "app/requirements-analytics.txt",
         ]
         assert all((ROOT / path).is_file() for path in required)
         report["layout"] = {
-            "application_packages": ["canopy", "ingestion", "analytics"],
+            "application_packages": ["app/canopy", "app/ingestion", "app/analytics"],
             "required_paths_present": True,
             "infra_directory_present": (ROOT / "infra").is_dir(),
             "app_directory_present": (ROOT / "app").is_dir(),

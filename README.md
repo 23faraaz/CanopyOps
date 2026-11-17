@@ -11,6 +11,41 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
 - Local and GitHub Actions CI checks are described below. No AWS resources or deployment/CD workflow exist. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
 
+## Repository layout
+
+Application packages and dependency inputs/locks now live under `app/`. Python module names and container startup commands remain unchanged; `app/` is a source directory, not an additional import prefix.
+
+```text
+app/
+  canopy/                 # API, domain, storage, static assets and migrations
+  ingestion/              # Queue worker and finite producer
+  analytics/              # Historical analytics and optional cache
+  requirements*.in        # Dependency inputs and shared constraints
+  requirements*.txt       # Hash-locked runtime/development dependencies
+docker/                   # Ingestion and analytics image recipes
+Dockerfile                # API image recipe
+compose*.yaml             # Local orchestration
+postgres/                 # Database role bootstrap
+monitoring/               # Prometheus, Grafana and local alert routing
+scripts/                  # Operator commands and verification tools
+tests/                    # Application/guard regression tests
+security/                 # Explicit risk controls and review proposals
+```
+
+Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform infrastructure will be added separately when its first real configuration is implemented.
+
+For Python-only development from the checkout root, use the existing virtual environment and the source path explicitly:
+
+```bash
+python -m pip install --require-hashes -r app/requirements.txt
+PYTHONPATH=app python -m canopy.api
+# Development dependencies and tests:
+python -m pip install --require-hashes -r app/requirements-dev.txt
+python -m pytest
+```
+
+Keep the intended backend/database configuration explicit when running Python directly; do not substitute a fresh SQLite file for the active PostgreSQL dataset. Docker Compose remains the recommended route to the existing local database. Pytest uses `pythonpath = ["app"]`; CI syntax/lint checks target `app`, `scripts` and `tests`. Dependency regeneration can run from `app/` so relative constraints and filenames remain meaningful. Older dated evidence below retains its historical paths; current source paths include the `app/` prefix.
+
 ## Supported Python runtime
 
 CanopyOps supports **Python 3.12 only**, currently verified as **3.12.16** in the digest-pinned Dockerfile image. Other minor versions are not promised or tested; there is no Python-version matrix. Host Python launches the check controller and is not evidence of application compatibility. `scripts/verify_docker.py` reads the pinned image reference directly from the Dockerfile; CI installs the hash-locked dependencies and runs syntax, Ruff, `pip check` and pytest in that exact image. Container verification compares the built runtime's full Python version with the test image and records both. The repository Dockerfile uses the same pinned Alpine image in both build stages; prior Debian image measurements and CVE assessments below are historical evidence. The running local services have not been replaced by this image change.
@@ -62,7 +97,7 @@ On native Linux, the host secret directory is mode 0700. Individual file-based C
 | `canopy_reader` | API: schema usage and SELECT on events/states only |
 | `canopy_writer` | Generator/future worker: SELECT, INSERT events, INSERT/UPDATE states; no event UPDATE, DELETE or schema DDL |
 
-All three application/migration roles are non-superusers with no role/database creation. Migrations are checksum-checked, ordered SQL files in `canopy/migrations/`; they are run explicitly with the migration role, not by API startup. Connection settings are `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD_FILE`, and optional `PGSSLMODE`. RDS will require runtime secrets and an explicit TLS configuration later.
+All three application/migration roles are non-superusers with no role/database creation. Migrations are checksum-checked, ordered SQL files in `app/canopy/migrations/`; they are run explicitly with the migration role, not by API startup. Connection settings are `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD_FILE`, and optional `PGSSLMODE`. RDS will require runtime secrets and an explicit TLS configuration later.
 
 ## Repeatable migration procedure
 
@@ -846,3 +881,19 @@ python3 scripts/verify_local_endpoints.py --project canopyops
 ```
 
 This live-stack check is operator-run; CI has no live database credentials or running project. Existing CI separately builds the repository's Dockerfiles, runs application/unit checks and disposable container verification, and keeps its strict image gate. No runtime application code or accepted-risk scope was changed by adding this verifier.
+
+## App-directory refactor verification and approved build-scope review
+
+Moved **33 tracked application/dependency files** with identical file bytes. Existing Python imports are unchanged. Integration changes are limited to Docker source COPY paths, the Docker allowlist, moved-file references, pytest/Ruff/CI paths and the migration-file Git ignore exception. No dependency version, schema, application implementation, base image or Compose input changed.
+
+Fresh API container verification passed assets/health, non-root/read-only execution, private metrics, SQLite persistence across replacement and graceful exit0. Measured layer-cold build19.13s, cached3.20s and source-only3.66s; dependency installation stayed cached. Layer-cold excludes any guarantee of cold base/download caches. The API image's reported size was33,199,800bytes; differences in image metadata are not application-data changes.
+
+New-layout analytics/cache run **`8e5c6864fec14b0f93b6e8cda02d1a28`** passed: known-value hourly/threshold calculations, late arrival, actual cache expiry, Redis outage fallback0.394s in the observed request, corrupt cache,319 evictions, database outage/readiness behavior, reader permissions and clean shutdown. Queue run **`1a36e2faafc24b888750db934c59b191`** passed with17 unique events/four stations, duplicate/conflict/late handling, database interruption, commit-before-delete crash recovery, DLQ routing and clean shutdown. Only disposable test resources were removed.
+
+Live read-only probe **`1f4e592181454d758573f2d5069e78b8`** reports `app_directory_present=true`, required paths present, both APIs healthy,2,780 observations/eight hourly buckets, PostgreSQL then Redis, four fresh stations and normal generator progress33,700->33,704. Original container IDs/volume bindings were unchanged. The running original services were not recreated; separate fresh-container drills above validate the rebuilt source layout. Evidence and file-byte manifests stay ignored under `backups/`.
+
+The existing SQLite acceptance explicitly invalidates itself when its bound Dockerfile changes. Only **`dockerfile_sha256`** differed from the prior approved build: two COPY source paths now include `app/`. Runtime application hash remains `50765055d732b9f457a6d77f835528e03a551760e57b614385dde62a2fa22937`; base, runtime lock bytes, SQLite package/features and both bound Compose hashes match. After reviewing `security/app-layout-risk-proposal.json`, the owner explicitly approved that Dockerfile-only scope update. The active acceptance was updated only after that approval and a fresh current-scope comparison. The same three known SQLite CVEs remain accepted only for local synthetic-data use, with unchanged **23 November2026 00:00UTC** expiry; no AWS/production authorization or expiry extension was granted. The review record retains its before/after Dockerfile hashes and named approval. Raw scanner success does not override known advisories, expiry or future scope changes.
+
+Refactor checks: **75 Python tests**, syntax/Ruff, all Dockerfile/workflow/Compose/rule checks and six independent raw HIGH/CRITICAL image scans passed. The previously blocked Dockerfile scope was explicitly approved by the owner; a clean raw scanner report is not treated as risk approval. The full gate still enforces the approved scope and expiry.
+
+After the owner-approved Dockerfile-only scope update, `python3 scripts/checks.py --only scan` passed the full local gate: all six raw image scans and the exact known-SQLite scope/expiry policy. This does not mean SQLite was patched or approved for AWS.

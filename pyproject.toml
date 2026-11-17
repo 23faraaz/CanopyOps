@@ -1,7 +1,10 @@
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-include = ["canopy/**/*.py", "ingestion/**/*.py", "analytics/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+include = ["app/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = ["E4", "E9", "F"]
+
+[tool.pytest.ini_options]
+pythonpath = ["app"]

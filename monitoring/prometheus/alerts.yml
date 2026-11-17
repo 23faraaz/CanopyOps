@@ -1,0 +1,25 @@
+groups:
+  - name: canopy-local
+    interval: 5s
+    rules:
+      - alert: CanopyProcessingStopped
+        expr: (sum(changes(canopy_station_observed_timestamp_seconds{job="canopy-api"}[1m])) == 0) and on() (up{job="canopy-api"} == 1) and on() (count(canopy_station_observed_timestamp_seconds{job="canopy-api"}) == 4)
+        for: 30s
+        labels:
+          severity: warning
+          scope: local-synthetic
+          component: canopy-api
+      - alert: CanopyReadingsStale
+        expr: (time() - canopy_station_observed_timestamp_seconds{job="canopy-api"} > 120) and on(job, instance) (up{job="canopy-api"} == 1)
+        for: 10s
+        labels:
+          severity: warning
+          scope: local-synthetic
+          component: canopy-api
+      - alert: CanopyMetricsMissing
+        expr: (up{job="canopy-api"} == 0) or absent(up{job="canopy-api"}) or ((up{job="canopy-api"} == 1) and on() ((count(canopy_station_observed_timestamp_seconds{job="canopy-api"}) or vector(0)) < 4))
+        for: 10s
+        labels:
+          severity: warning
+          scope: local-synthetic
+          component: canopy-api

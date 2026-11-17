@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 import subprocess
 import sys
@@ -80,6 +81,63 @@ def configuration_checks():
         str(ROOT / "compose.postgres.yaml"),
         "config",
         "--quiet",
+    )
+
+    run(
+        "docker",
+        "compose",
+        "-f",
+        str(ROOT / "compose.yaml"),
+        "-f",
+        str(ROOT / "compose.postgres.yaml"),
+        "-f",
+        str(ROOT / "compose.alerts.yaml"),
+        "--profile",
+        "alerts",
+        "config",
+        "--quiet",
+    )
+    prometheus = re.search(
+        r"image: (prom/prometheus:\S+)", (ROOT / "compose.yaml").read_text()
+    ).group(1)
+    alertmanager = "canopyops-alertmanager:local"
+    run("docker", "build", "-t", alertmanager, str(ROOT / "monitoring/alertmanager"))
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'monitoring/alertmanager/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
+    )
+    mount = f"type=bind,source={ROOT / 'monitoring/prometheus'},target=/rules,readonly"
+    for args in [("check", "rules", "alerts.yml"), ("test", "rules", "alerts-test.yml")]:
+        run(
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            mount,
+            "-w",
+            "/rules",
+            "--entrypoint",
+            "promtool",
+            prometheus,
+            *args,
+        )
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'monitoring/alertmanager/alertmanager.yml'},target=/config.yml,readonly",
+        "--entrypoint",
+        "amtool",
+        alertmanager,
+        "check-config",
+        "/config.yml",
     )
 
 
@@ -207,6 +265,55 @@ def scan_checks():
         evidence.write_text(json.dumps(summary, indent=2))
         print("Known SQLite advisory gate: " + json.dumps(policy), flush=True)
         scan.check_returncode()
+        run("docker", "save", "-o", str(archive), "canopyops-alertmanager:local")
+        alert_scan = run(
+            "docker",
+            "run",
+            "--rm",
+            "--mount",
+            f"type=bind,source={directory},target=/scan",
+            *identity,
+            "--env",
+            "HOME=/tmp",
+            TRIVY,
+            "image",
+            "--input",
+            "/scan/image.tar",
+            "--cache-dir",
+            "/scan/cache",
+            "--no-progress",
+            "--scanners",
+            "vuln",
+            "--severity",
+            "HIGH,CRITICAL",
+            "--exit-code",
+            "1",
+            "--format",
+            "json",
+            "--output",
+            "/scan/alertmanager.json",
+            check=False,
+        )
+        alert_report = json.loads((Path(directory) / "alertmanager.json").read_text())
+        summary["alertmanager_scan"] = {
+            "exit_code": alert_scan.returncode,
+            "findings": [
+                {
+                    "id": v["VulnerabilityID"],
+                    "package": v["PkgName"],
+                    "installed": v["InstalledVersion"],
+                    "fixed": v.get("FixedVersion", ""),
+                }
+                for r in alert_report.get("Results", [])
+                for v in r.get("Vulnerabilities", [])
+            ],
+        }
+        evidence.write_text(json.dumps(summary, indent=2))
+        print(
+            "Alertmanager HIGH/CRITICAL gate: " + json.dumps(summary["alertmanager_scan"]),
+            flush=True,
+        )
+        alert_scan.check_returncode()
         if policy["blocked_cves"]:
             raise RuntimeError(
                 "Unaccepted known SQLite advisories remain; a clean Trivy report does not override them"

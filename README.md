@@ -568,7 +568,7 @@ python3 scripts/checks.py --only configuration
 
 Safe counts, status, command/exit-code timestamps and limitations are under ignored `backups/monitoring-62094c7fd9f745dfbde89d6caa8af0fc/summary.json` and `commands.json`. This successful drill was run through WSL as the normal local operator. Python syntax, Ruff lint/format and all **37 tests** passed afterward; Hadolint, actionlint for both workflows and quiet Compose validation passed. No application module, runtime dependency lock, Dockerfile, accepted-risk policy or bound Compose file changed. The SQLite acceptance retains its original 23 November 00:00 UTC expiry and local-only scope.
 
-These probes are discrete observations, not a continuous-availability measurement. No alert rules, Alertmanager route or notification delivery were implemented or tested; query/dashboard visibility is the evidence here. Stopped processing required an explicit operator restart, so this is not automatic recovery or high availability. Environmental incident state is not recreated merely because data became stale. Before AWS, remaining preparation includes tested alert delivery, a backup restoration into a separate database, and a costed private-RDS/TLS/IAM/secrets/teardown design. Those remain separate stages; this work creates no AWS resources.
+These probes are discrete observations, not a continuous-availability measurement. At that stage, no alert rules, Alertmanager route or notification delivery had been implemented or tested; query/dashboard visibility is the evidence for that earlier drill. Stopped processing required an explicit operator restart, so this is not automatic recovery or high availability. Environmental incident state is not recreated merely because data became stale. Before AWS, remaining preparation includes tested alert delivery, a backup restoration into a separate database, and a costed private-RDS/TLS/IAM/secrets/teardown design. Those remain separate stages; this work creates no AWS resources.
 
 Branch protection stage merged via [PR #1](https://github.com/23faraaz/CanopyOps/pull/1), main commit `375d76f`; deadline tracking merged via [PR #2](https://github.com/23faraaz/CanopyOps/pull/2), main commit `a772463`. Both passed the required `checks` job. The manually dispatched default-branch deadline/vendor review also [passed](https://github.com/23faraaz/CanopyOps/actions/runs/43891150031). Daily scheduling itself has not yet reached its first scheduled execution; it should not be described as an already observed cron run.
 
@@ -606,3 +606,65 @@ python3 scripts/checks.py --only configuration
 All **41 Python tests** passed, including the four native-client fixture tests; syntax/Ruff, Hadolint, both workflows' actionlint and quiet Compose validation passed. One existing deprecation warning remains. Safe evidence is in ignored `backups/postgres-restore-018958ac7b464f28b1d6f8d37993caca/summary.json` and `commands.json`. The raw `canopy.dump` stays ignored/local and is never printed or committed. This stage changes no application module, runtime lock, Dockerfile, bound Compose configuration or SQLite acceptance. No AWS resources or live rollback activation are implied.
 
 The consistency and archive choices follow the [PostgreSQL pg_dump documentation](https://www.postgresql.org/docs/17/app-pgdump.html); restoration uses the documented [pg_restore behavior](https://www.postgresql.org/docs/17/app-pgrestore.html).
+
+## Private local alert delivery
+
+`compose.alerts.yaml` is an opt-in overlay for the existing PostgreSQL stack. Prometheus evaluates three local-synthetic alerts and sends them to Alertmanager, which delivers JSON to a private webhook receiver. No email, Slack, credentials or real people are involved. The base stack remains unchanged unless this overlay/profile is explicitly selected.
+
+- **Processing stopped:** no latest-state timestamp changes across four stations for a one-minute range, then 30 seconds pending. This is a progress signal, not an exact event count or proof that every possible writer stopped.
+- **Stale readings:** each station's observed timestamp exceeds 120 seconds, then 10 seconds pending; only evaluated with a successful API scrape.
+- **Missing metrics:** failed/absent API scrape or fewer than four station series, then 10 seconds pending. The four-station expectation is deliberately local and must change if station coverage changes.
+
+Rule fixtures exercise thresholds, pending intervals, recovery, missing targets/series and scrape-failure suppression. `scripts/checks.py --only configuration` runs promtool checks/tests and the rebuilt amtool configuration validator. Real notification/fault tests are operator-run, not claimed as CI coverage.
+
+Both added services run non-root, with read-only root filesystems, dropped capabilities and no published host ports. Alertmanager writes only its named `/alertmanager` volume and tmpfs; the receiver writes `/data/alert-receipts` on a separate named volume and tmpfs. It runs the stdlib-only `scripts/alert_receiver.py` using the existing application image, without changing application dependencies or startup behavior. The scripts mount is read-only. API publication remains localhost-only.
+
+The receiver validates the configured alert names/scope, bounds bodies to 64 KiB and batches to 20 alerts, excludes arbitrary annotations, and appends sanitized notification metadata to an fsynced ledger before returning HTTP 200. A failed durable write returns HTTP 503 so Alertmanager can retry. HTTP acknowledgement loss can create duplicate receipts; notification delivery is not exactly once. Fingerprint plus startsAt pairs firing/recovery notifications. Receiver replacement preserves the named volume. This is container-replacement evidence, not a host power-loss durability test.
+
+Retention keeps the current and previous JSONL segment, rotating after the current segment reaches 5 MiB; total usage is bounded by two thresholds plus bounded-notification overshoot. Older receipts are intentionally discarded. Incomplete/corrupt records fail closed for investigation rather than being silently truncated. Inspect/export required evidence before pruning. Do not use `down --volumes` on the live stack merely to stop alerts.
+
+### Alertmanager dependency fix
+
+The pinned upstream 0.35.0 image scan found **CVE-2026-78661** in `golang.org/x/net` 0.61.0 in both alertmanager and amtool. The [official Go advisory](https://pkg.go.dev/vuln/GO-2026-6860) identifies the HTML parser allocation issue and fixes it in 0.62.0. This finding was not waived or included in the unrelated SQLite acceptance.
+
+`monitoring/alertmanager/Dockerfile` rebuilds the same upstream release with a committed Go module lock selecting 0.62.0. It pins compatible official Go/Alertmanager image digests, checks the upstream source module checksum and official release UI asset checksum, runs selected upstream webhook/configuration tests, and copies only the two static binaries into the runtime. This is a locally patched build, versioned `0.35.0-local-net0.62.0`, not an unchanged official binary. The Go toolchain and test dependencies stay outside the runtime. Review and replace this maintenance patch when an appropriate upstream fixed release is available.
+
+The existing CI configuration step builds this runtime; the scan step scans it separately with the same HIGH/CRITICAL `--exit-code 1` gate. No exception applies to Alertmanager. The three previously approved SQLite exceptions remain unchanged, local-only, expiring 23 November 2026 at 00:00 UTC; a clean package scan does not erase those known risks.
+
+```bash
+# Isolated disposable PostgreSQL drill; never faults the current live stack:
+python3 scripts/verify_postgres_monitoring.py --alerts
+
+# Repeatable syntax/lint/test, config/build and both-image scan checks:
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+# Build/verify canopyops:local before a standalone scan if not already built:
+python3 scripts/checks.py --only container
+python3 scripts/checks.py --only scan
+
+# Optional activation on your local PostgreSQL stack, after reviewing the overlay:
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.alerts.yaml --profile alerts up -d --build
+# Inspect sanitized receipt metadata from inside the network; no host port needed:
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.alerts.yaml --profile alerts exec -T alert-receiver python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:9080/receipts')))"
+```
+
+The overlay is not automatically activated against the current live project by the drill. Its unique test project uses disposable readings, guarded fresh volumes and a dedicated telemetry fault network, preserves original container IDs/volume bindings, and removes only its own resources after successful evidence capture. Failed drills retain diagnostics and stop their own generator. This local receiver proves neither delivery to a person nor resilience when the host/Prometheus/Alertmanager itself is unavailable; external monitoring and human escalation remain future work. No AWS availability or failover claim is made.
+
+### Verified delivery evidence, 17 November 2026
+
+Final patched-image run **`ac23d813d9ba465ea6753d317ab6907b`** passed with cleanup completed. Safe summary/command evidence and the sanitized receipt archive remain ignored under `backups/monitoring-ac23d813d9ba465ea6753d317ab6907b/`.
+
+| Case | Observed result |
+| --- | --- |
+| Healthy baseline | Four fresh stations, 11 Grafana panel queries with data; private database/metrics/receiver ports and non-root added services verified |
+| Receiver unavailable | One failed webhook attempt observed; firing notification arrived after receiver restart |
+| Processing stopped | Durable events **172 -> 172**; all four stations stale, minimum age **120.895 s**, observed pause **126.750 s**; dashboard/assets/health still HTTP 200, scrape/storage available |
+| Firing and recovery | **1 processing alert + 1 matching resolution; 4 stale station alerts + 4 matching resolutions** |
+| Metrics disconnected | Scrape down and station/storage series missing, while API stayed HTTP 200 and events advanced **244 -> 296** |
+| Metrics firing and recovery | **1 missing-metrics alert + 1 matching resolution** after reconnect |
+| Receipt persistence | Receiver container replaced on the same named volume; **7 -> 7** batches, all earlier receipts preserved; archive hash `d28fa9ad7784c8eb0b70588d1d43a594adac234ad6e705f747ab05b3778550e2` |
+| Isolation | Original API/generator/PostgreSQL IDs and volume bindings unchanged; no original-volume mounts in test tools; only successful test resources removed |
+
+The actual patched Alertmanager image tested was `sha256:2862af0a1a34c58a434e38e0727d4aec25ac3d4649f07cd5ca9863d6a0777e21`, reporting Go 1.27.4 and version 0.35.0-local-net0.62.0. Both-image Trivy scans returned **zero reported HIGH/CRITICAL findings**, with the separate known-SQLite advisory gate still enforcing its existing scoped acceptance. This does not mean the known SQLite vulnerabilities disappeared. All **49 Python tests**, syntax/Ruff, both Dockerfiles' Hadolint, both workflows' actionlint, quiet Compose validation, promtool fixtures and patched amtool checks passed. One existing deprecation warning remains. Selected upstream webhook/configuration tests passed during the Alertmanager build; the entire upstream suite was not run.
+
+An earlier final-drill attempt (`9ee6fb523aea4a07a136cbd3a168f168`) failed before creating test services because Docker reported `getwd: no such file or directory` while validating Compose. The same inputs then validated and the fresh run above passed; that failed attempt is retained locally as troubleshooting evidence. The earlier unpatched-image functional run is not used as proof for the patched image. No raw database dump, receipt archive or diagnostics are committed.

@@ -56,14 +56,14 @@ def main():
     report["layer_cold_seconds"], _ = build("--no-cache")
     report["cached_seconds"], cached = build()
     assert dependency_cached(cached), cached
-    source = ROOT / "canopy/static/style.css"
+    source = ROOT / "app/canopy/static/style.css"
     original = source.read_bytes()
     try:
         marker = f"\n/* Docker cache verification {uuid.uuid4().hex}. */\n".encode()
         source.write_bytes(original + marker)
         report["source_only_seconds"], changed = build()
         assert dependency_cached(changed), changed
-        copy_step = re.search(r"#(\d+) \[runtime \d+/\d+\] COPY canopy/", changed)
+        copy_step = re.search(r"#(\d+) \[runtime \d+/\d+\] COPY app/canopy/", changed)
         assert copy_step and not re.search(r"#" + copy_step.group(1) + r" CACHED", changed), changed
         report["dependency_cache_reused_after_source_change"] = True
         report["changed_source_layer_rebuilt"] = True

@@ -42,9 +42,9 @@ def python_checks():
         BASE,
         "sh",
         "-ec",
-        "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
-        "python --version; python -m pip check; python -m compileall -q canopy ingestion analytics scripts tests; python -m ruff check canopy ingestion analytics scripts tests; "
-        "python -m ruff format --check canopy ingestion analytics scripts tests; "
+        "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r app/requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
+        "python --version; python -m pip check; python -m compileall -q app scripts tests; python -m ruff check app scripts tests; "
+        "python -m ruff format --check app scripts tests; "
         "python -m pytest -q -p no:cacheprovider --basetemp /tmp/canopy-tests",
     )
 

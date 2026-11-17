@@ -37,7 +37,7 @@ def scope(root, base_image, runtime):
         "base_image": base_image,
         "architecture": runtime["architecture"],
         "dockerfile_sha256": digest(root / "Dockerfile"),
-        "requirements_sha256": digest(root / "requirements.txt"),
+        "requirements_sha256": digest(root / "app/requirements.txt"),
         "compose_sha256": digest(root / "compose.yaml"),
         "postgres_compose_sha256": digest(root / "compose.postgres.yaml"),
         "application_sha256": runtime["application_sha256"],

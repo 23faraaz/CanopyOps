@@ -1,11 +1,26 @@
-# Allow only the files needed by the image build.
+# Explicit source allowlist; app/ is the repository source root, not an image prefix.
 **
 !Dockerfile
 !.dockerignore
-!requirements.txt
-!canopy/
-!canopy/**
-# Exclude these even if they appear inside the application directory.
+!app/
+!app/requirements.txt
+!app/requirements-queue.txt
+!app/requirements-analytics.txt
+!app/canopy/
+!app/canopy/**
+!app/ingestion/
+!app/ingestion/*.py
+!app/analytics/
+!app/analytics/*.py
+!docker/
+!docker/ingestion/
+!docker/ingestion/Dockerfile
+!docker/analytics/
+!docker/analytics/Dockerfile
+!scripts/
+!scripts/recovery/
+!scripts/recovery/ledger.py
+# Exclude credentials, local databases and development/build artifacts everywhere.
 **/__pycache__/
 **/*.py[cod]
 **/.git/
@@ -15,6 +30,7 @@
 **/.env.*
 **/.aws/
 **/.ssh/
+**/.secrets/
 **/credentials
 **/*.pem
 **/*.key
@@ -27,32 +43,10 @@
 **/*.log
 **/dist/
 **/build/
-
-**/.secrets/
 **/backups/
-
-# Database exports are never source artifacts.
 **/*.sqlite*
 **/*.dump
 **/*.sql.gz
 **/*.backup
 **/*.sql
-!canopy/migrations/*.sql
-
-# Separate, explicit queue build inputs; no credentials or exports.
-!requirements-queue.txt
-!docker/
-!docker/ingestion/
-!docker/ingestion/Dockerfile
-!ingestion/
-!ingestion/*.py
-!scripts/
-!scripts/recovery/
-!scripts/recovery/ledger.py
-
-!analytics/
-!analytics/*.py
-!docker/analytics/
-!docker/analytics/Dockerfile
-
-!requirements-analytics.txt
+!app/canopy/migrations/*.sql

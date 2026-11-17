@@ -17,6 +17,7 @@ RUNTIME = {
 }
 SCOPE = {
     "base_image": "python@sha256:fixture",
+    "dockerfile_sha256": "fixture",
     "application_sha256": "fixture",
     "sqlite_package": RUNTIME["sqlite_package"],
 }
@@ -68,7 +69,9 @@ def test_invalid_approval_fails_closed(field, value):
         evaluate(RUNTIME, policy, SCOPE, NOW)
 
 
-@pytest.mark.parametrize("field", ["base_image", "application_sha256", "sqlite_package"])
+@pytest.mark.parametrize(
+    "field", ["base_image", "dockerfile_sha256", "application_sha256", "sqlite_package"]
+)
 def test_changed_image_scope_requires_review(field):
     changed = dict(SCOPE)
     changed[field] = "changed"

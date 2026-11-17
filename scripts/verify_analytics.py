@@ -133,9 +133,9 @@ def main():
         "-f",
         str(ROOT / "compose.yaml"),
         "-f",
-        str(ROOT / "compose.postgres.yaml"),
+        str(ROOT / "docker/compose/postgres.yaml"),
         "-f",
-        str(ROOT / "compose.analytics.yaml"),
+        str(ROOT / "docker/compose/analytics.yaml"),
         "-f",
         str(overlay),
         "--profile",
@@ -144,7 +144,7 @@ def main():
 
     if cache_enabled:
         position = compose.index(str(overlay)) - 1
-        compose[position:position] = ["-f", str(ROOT / "compose.cache.yaml")]
+        compose[position:position] = ["-f", str(ROOT / "docker/compose/cache.yaml")]
 
     def dc(*args, **kwargs):
         return execute(*compose, *args, **kwargs)

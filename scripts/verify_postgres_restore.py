@@ -83,7 +83,7 @@ def main():
     source_network = next(iter(source_info["NetworkSettings"]["Networks"]))
     source_host = source_info["Name"].lstrip("/")
     pg_image = re.search(
-        r"image: (postgres:\S+)", (ROOT / "compose.postgres.yaml").read_text()
+        r"image: (postgres:\S+)", (ROOT / "docker/compose/postgres.yaml").read_text()
     ).group(1)
     image = "canopyops-restore:" + run_id
     execute("docker", "build", "-q", "-t", image, ".")
@@ -217,7 +217,7 @@ def main():
         "-f",
         str(ROOT / "compose.yaml"),
         "-f",
-        str(ROOT / "compose.postgres.yaml"),
+        str(ROOT / "docker/compose/postgres.yaml"),
         "-f",
         str(overlay),
         "-f",

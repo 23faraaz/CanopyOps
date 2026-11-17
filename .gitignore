@@ -37,3 +37,6 @@ backups/
 **/*.backup
 **/*.sql
 !app/canopy/migrations/*.sql
+
+# Local runtime data; never publish database records.
+/data/

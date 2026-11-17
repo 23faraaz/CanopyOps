@@ -41,7 +41,7 @@ For Python-only development from the checkout root, use the existing virtual env
 
 ```bash
 python -m pip install --require-hashes -r app/requirements.txt
-PYTHONPATH=app python -m canopy.api
+BACKEND=local DATABASE_PATH="$PWD/data/sqlite/canopy.db" PYTHONPATH=app python -m canopy.api
 # Development dependencies and tests:
 python -m pip install --require-hashes -r app/requirements-dev.txt
 python -m pytest
@@ -88,6 +88,23 @@ The migration creates an ignored `compose.override.yaml` to activate PostgreSQL 
 `bash scripts/run.sh stop` preserves all named volumes. `docker compose down` also retains volumes. Never use `down --volumes` or a volume prune on the real environment if data must survive.
 
 A fresh checkout defaults to SQLite. To migrate an existing source volume, follow the procedure below. Do not run an empty PostgreSQL instance and substitute newly generated data for the source records.
+
+## Host SQLite data location
+
+The optional host-development database is `data/sqlite/canopy.db`, with its `-wal` and `-shm` sidecars in the same directory. This is an older host dataset, not the active PostgreSQL dataset or the container's `/data/canopy.db` named volume. Do not use it as a substitute for exporting current PostgreSQL writes during rollback.
+
+For an explicit host SQLite session from the checkout root:
+
+```bash
+mkdir -p data/sqlite
+BACKEND=local DATABASE_PATH="$PWD/data/sqlite/canopy.db" PYTHONPATH=app python -m canopy.api
+```
+
+Keep `DATABASE_PATH` explicit: the unchanged application's fallback is `canopy.db` relative to its working directory, so omitting it can recreate a root database. Do not run this host API on a port already used by another service. Normal Docker Compose operation remains the recommended route to the active PostgreSQL data, and its database paths are unchanged.
+
+On 17 November 2026, no owner was found for the root host SQLite files using WSL `lsof`, and Windows exclusive-open checks passed. A consistent SQLite backup was made and verified before moving all three files together. Source, backup and relocated database each passed integrity checks and matched complete-row hashes: **128 events and 4 states**. An initial pre-move guard stopped because backup connections remained open; after explicitly closing them, the guard passed and relocation completed. No live service or Docker volume was changed. The verified backup and safe summary are retained locally under `backups/host-sqlite-layout-252e253a8dda4cdeab3baa2ab1233e8c/`.
+
+The whole `data/` directory is ignored by Git and excluded by the Docker context allowlist. Database records and backups are local artifacts, not files to commit.
 
 ## Storage inspection and schema
 

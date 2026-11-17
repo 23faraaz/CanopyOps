@@ -744,3 +744,28 @@ All four local runtime scans returned zero reported HIGH/CRITICAL findings after
 The API container regression check also passed persistence after replacement, dashboard/assets, private metrics, non-root/read-only execution and shutdown. Its layer-cold build was **15.13 s**, cached build **2.54 s**, and source-only build **2.66 s**, with dependency installation reused. Layer-cold means `--no-cache`; base-image and pip download caches could already be warm. The ingestion Dockerfile installs its locked dependencies before source; cached dependency installation was observed during source rebuilds, without treating the API timings as ingestion timings.
 
 Troubleshooting retained an early Docker `getwd: no such file or directory` build failure before test services were created; rerunning from a freshly resolved WSL working directory succeeded. The fixture's explicit PYTHONPATH and polling-status reporting were corrected during development. Earlier runs are retained locally; the final run above is the acceptance evidence. Live transport activation, multi-worker concurrency, analytics, Redis, AWS and zero-downtime release claims remain unfinished.
+
+## Read-only analytics service: verified before caching
+
+A separate analytics service now exposes `/analytics/hourly` and `/analytics/thresholds`, taking explicit timezone-aware `start`, `end` and optional `station_id` query parameters. It reads persisted PostgreSQL `events` through the existing `canopy_reader` role. It does not change schemas, existing records, API startup/assets or station names. Incident duration/history reconstruction is not implemented; current state retains only bounded incident history and should not be presented as a complete historical incident ledger.
+
+Windows use **UTC, inclusive start/exclusive end**, positive duration and a maximum of seven days. Unknown stations, naive timestamps and invalid ranges return 422. Hourly SQL aggregates produce per-station count and minimum/mean/maximum temperature, humidity and soil moisture, rounded to three decimals. Missing hours are omitted rather than filled with zeros. Thresholds match the application: temperature >=35 C, soil moisture <25 percent. An observation exceeding both contributes once to `any_threshold`. Overall percentages pool observations across stations, rather than averaging station percentages. An empty denominator returns JSON null, not a misleading zero percent. Percentages describe observations, not time outside limits; late readings are included in historical analytics even when they do not replace latest state.
+
+The image uses compatible pinned Python 3.12 stages and the existing hash-locked API requirements before explicit source COPY. It includes only required PostgreSQL/domain modules and the new analytics package; unused SQLite libraries are excluded. No SQLite acceptance is extended to analytics. Runtime UID 10001, read-only rootfs, tmpfs and dropped capabilities are preserved. `compose.analytics.yaml` opts in through the analytics profile, publishes HTTP only at localhost:8002 and leaves metrics private at port 9100. Database transactions are read-only, SQL uses bound values and data queries have a five-second statement timeout. `/health/live` reports process responsiveness; `/health/ready` checks the database uncached. Query failures return generic 503 responses without connection details. Private Prometheus counters/histograms expose outcomes and latency; scraping/dashboard wiring is not yet added for this service.
+
+```bash
+# Safe, new disposable PostgreSQL project with known-value fixtures:
+python3 scripts/verify_analytics.py
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+python3 scripts/checks.py --only scan
+
+# Optional reviewed local activation against your EXISTING PostgreSQL volume:
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml --profile analytics up -d --build postgres analytics
+# Endpoint example (historical fixture window; actual live data can differ):
+curl --get http://127.0.0.1:8002/analytics/thresholds --data-urlencode 'start=2026-01-01T00:00:00Z' --data-urlencode 'end=2026-01-01T02:00:00Z'
+```
+
+Verified on 17 November 2026, isolated run **`fda42e73282b47289d17ba30e7883e26`**: six fixtures seeded, four included within the window, three hourly buckets, two high-temperature observations, two low-soil observations and three breaching either threshold (**75%** overall). A late fifth in-window observation changed the result to **60%**, increased the first hourly count from two to three and yielded soil mean **26.333**. Timezone-equivalent windows matched; start/end boundaries, station filters, empty results and invalid-input rejection passed. Three forbidden reader write/schema actions returned SQLSTATE42501. During clone database interruption, liveness stayed 200 while readiness/query returned503; restart restored correct results. Metrics were reachable only internally and graceful exit was0. Original container IDs/volume bindings were unchanged; only isolated test resources were removed. Evidence stays ignored under `backups/analytics-fda42e73282b47289d17ba30e7883e26/`.
+
+All **63 Python tests**, syntax/Ruff including analytics, Dockerfile/workflow/Compose checks and existing alert rule fixtures passed. The isolated real-PostgreSQL arithmetic test remains operator-run, distinct from CI unit fixtures. Existing SQLite risk scope/expiry is unchanged. This uncached calculation baseline is committed separately before Redis; no live analytics activation, frontend chart integration, Redis behavior, AWS deployment or cost-saving claim is implied.

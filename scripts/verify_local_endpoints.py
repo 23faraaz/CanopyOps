@@ -87,6 +87,12 @@ def main():
     try:
         required = [
             "Dockerfile",
+            "compose.yaml",
+            "docker/compose/postgres.yaml",
+            "docker/compose/analytics.yaml",
+            "docker/compose/cache.yaml",
+            "docker/compose/queue.yaml",
+            "docker/compose/alerts.yaml",
             "app/canopy/api.py",
             "app/ingestion/worker.py",
             "app/analytics/api.py",
@@ -102,6 +108,7 @@ def main():
             "required_paths_present": True,
             "infra_directory_present": (ROOT / "infra").is_dir(),
             "app_directory_present": (ROOT / "app").is_dir(),
+            "compose_directory_present": (ROOT / "docker/compose").is_dir(),
         }
         before = snapshot()
         for name in ["api", "generator", "postgres", "analytics", "redis", "prometheus", "grafana"]:

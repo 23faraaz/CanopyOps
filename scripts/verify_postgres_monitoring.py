@@ -207,10 +207,10 @@ networks:
         "-f",
         str(ROOT / "compose.yaml"),
         "-f",
-        str(ROOT / "compose.postgres.yaml"),
+        str(ROOT / "docker/compose/postgres.yaml"),
     ]
     if alerts_enabled:
-        compose.extend(["-f", str(ROOT / "compose.alerts.yaml"), "--profile", "alerts"])
+        compose.extend(["-f", str(ROOT / "docker/compose/alerts.yaml"), "--profile", "alerts"])
     compose.extend(["-f", str(overlay)])
 
     def dc(*args):

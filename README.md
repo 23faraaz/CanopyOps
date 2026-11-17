@@ -22,9 +22,12 @@ app/
   analytics/              # Historical analytics and optional cache
   requirements*.in        # Dependency inputs and shared constraints
   requirements*.txt       # Hash-locked runtime/development dependencies
-docker/                   # Ingestion and analytics image recipes
+docker/
+  compose/                # postgres, analytics, cache, queue and alerts overlays
+  ingestion/Dockerfile
+  analytics/Dockerfile
 Dockerfile                # API image recipe
-compose*.yaml             # Local orchestration
+compose.yaml              # Root orchestration entry point
 postgres/                 # Database role bootstrap
 monitoring/               # Prometheus, Grafana and local alert routing
 scripts/                  # Operator commands and verification tools
@@ -46,6 +49,24 @@ python -m pytest
 
 Keep the intended backend/database configuration explicit when running Python directly; do not substitute a fresh SQLite file for the active PostgreSQL dataset. Docker Compose remains the recommended route to the existing local database. Pytest uses `pythonpath = ["app"]`; CI syntax/lint checks target `app`, `scripts` and `tests`. Dependency regeneration can run from `app/` so relative constraints and filenames remain meaningful. Older dated evidence below retains its historical paths; current source paths include the `app/` prefix.
 
+## Compose layout verification (17 November 2026)
+
+The five optional overlays live in `docker/compose/`. Keep `compose.yaml` first in explicit `-f` commands: Docker resolves relative paths against the first file, so build contexts and mounts still resolve from the repository root ([Docker documentation](https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/)). The ignored local `compose.override.yaml` stays at the root; ordinary `bash scripts/run.sh` commands still work.
+
+```bash
+docker compose -f compose.yaml \
+  -f docker/compose/postgres.yaml \
+  -f docker/compose/analytics.yaml \
+  -f docker/compose/cache.yaml \
+  --profile analytics ps
+```
+
+The base and all five overlay contents are unchanged. Seven effective configuration comparisons passed: SQLite, PostgreSQL, database tools, analytics/cache, ingestion, alerts and the combined profiles. Comparisons used an empty temporary environment input; no project `.env` or password files were inspected. Existing security fingerprints still match; the local-only SQLite acceptance and its expiry are unchanged.
+
+Validation passed: 75 Python tests, syntax/Ruff checks, Dockerfile/workflow lint, Compose configuration, alert fixtures and image builds. A fresh isolated `python3 scripts/verify_analytics.py --cache` run verified calculations, expiry, fallback, database interruption and graceful shutdown; its resources were removed afterward. The live read-only `python3 scripts/verify_local_endpoints.py` check passed for dashboard assets, both APIs, health, metrics, Grafana and Redis. Four stations were fresh and persisted events advanced from 36,440 to 36,444. Original container IDs and volume bindings were unchanged.
+
+Raw local evidence remains ignored under `backups/compose-layout-52562ddbfe7747e1acfcc1a414ee2d3b/`, `backups/analytics-c53fbe88843a4981a9041469464d3ff5/` and the endpoint verifier's timestamped directory. These checks establish local behaviour, not AWS deployment or availability.
+
 ## Supported Python runtime
 
 CanopyOps supports **Python 3.12 only**, currently verified as **3.12.16** in the digest-pinned Dockerfile image. Other minor versions are not promised or tested; there is no Python-version matrix. Host Python launches the check controller and is not evidence of application compatibility. `scripts/verify_docker.py` reads the pinned image reference directly from the Dockerfile; CI installs the hash-locked dependencies and runs syntax, Ruff, `pip check` and pytest in that exact image. Container verification compares the built runtime's full Python version with the test image and records both. The repository Dockerfile uses the same pinned Alpine image in both build stages; prior Debian image measurements and CVE assessments below are historical evidence. The running local services have not been replaced by this image change.
@@ -62,7 +83,7 @@ bash scripts/run.sh status
 bash scripts/run.sh logs
 ```
 
-The migration creates an ignored `compose.override.yaml` to activate PostgreSQL for ordinary Compose commands. The tracked `compose.yaml` remains the SQLite baseline; `compose.postgres.yaml` is the explicit PostgreSQL overlay. Do not simply remove the override to roll back: the retained SQLite file does not contain new PostgreSQL writes.
+The migration creates an ignored `compose.override.yaml` to activate PostgreSQL for ordinary Compose commands. The tracked `compose.yaml` remains the SQLite baseline; `docker/compose/postgres.yaml` is the explicit PostgreSQL overlay. Do not simply remove the override to roll back: the retained SQLite file does not contain new PostgreSQL writes.
 
 `bash scripts/run.sh stop` preserves all named volumes. `docker compose down` also retains volumes. Never use `down --volumes` or a volume prune on the real environment if data must survive.
 
@@ -106,7 +127,7 @@ Prerequisites: the actual SQLite volume, Docker/Compose, Python 3, a clean local
 ```bash
 python3 scripts/init_secrets.py
 mkdir -p backups
-docker compose -f compose.yaml -f compose.postgres.yaml up -d --wait postgres
+docker compose -f compose.yaml -f docker/compose/postgres.yaml up -d --wait postgres
 docker build -t canopyops:local .
 python3 scripts/migrate_local.py rehearse
 ```
@@ -644,7 +665,7 @@ The consistency and archive choices follow the [PostgreSQL pg_dump documentation
 
 ## Private local alert delivery
 
-`compose.alerts.yaml` is an opt-in overlay for the existing PostgreSQL stack. Prometheus evaluates three local-synthetic alerts and sends them to Alertmanager, which delivers JSON to a private webhook receiver. No email, Slack, credentials or real people are involved. The base stack remains unchanged unless this overlay/profile is explicitly selected.
+`docker/compose/alerts.yaml` is an opt-in overlay for the existing PostgreSQL stack. Prometheus evaluates three local-synthetic alerts and sends them to Alertmanager, which delivers JSON to a private webhook receiver. No email, Slack, credentials or real people are involved. The base stack remains unchanged unless this overlay/profile is explicitly selected.
 
 - **Processing stopped:** no latest-state timestamp changes across four stations for a one-minute range, then 30 seconds pending. This is a progress signal, not an exact event count or proof that every possible writer stopped.
 - **Stale readings:** each station's observed timestamp exceeds 120 seconds, then 10 seconds pending; only evaluated with a successful API scrape.
@@ -678,9 +699,9 @@ python3 scripts/checks.py --only container
 python3 scripts/checks.py --only scan
 
 # Optional activation on your local PostgreSQL stack, after reviewing the overlay:
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.alerts.yaml --profile alerts up -d --build
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/alerts.yaml --profile alerts up -d --build
 # Inspect sanitized receipt metadata from inside the network; no host port needed:
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.alerts.yaml --profile alerts exec -T alert-receiver python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:9080/receipts')))"
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/alerts.yaml --profile alerts exec -T alert-receiver python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:9080/receipts')))"
 ```
 
 The overlay is not automatically activated against the current live project by the drill. Its unique test project uses disposable readings, guarded fresh volumes and a dedicated telemetry fault network, preserves original container IDs/volume bindings, and removes only its own resources after successful evidence capture. Failed drills retain diagnostics and stop their own generator. This local receiver proves neither delivery to a person nor resilience when the host/Prometheus/Alertmanager itself is unavailable; external monitoring and human escalation remain future work. No AWS availability or failover claim is made.
@@ -722,7 +743,7 @@ The worker exposes private metrics for accepted/duplicate/failed/conflicting att
 
 ElasticMQ provides a credential-free SQS-compatible interface for local tests. It is not AWS SQS and does not prove AWS IAM, service durability, throughput or failover. The emulator is **in-memory** in this configuration: replacing/stopping it loses queued and dead-letter messages. The outbox retains original payloads but does not automatically resend records previously acknowledged by a lost emulator. Do not equate emulator acknowledgement with durable cloud queue storage. Dead-letter routing is tested; automated DLQ redrive is not implemented or tested. See the [upstream configuration documentation](https://github.com/softwaremill/elasticmq).
 
-`compose.queue.yaml` is opt-in. Queue and worker ports are not published. All added runtime processes use UID 10001, read-only root filesystems, tmpfs, dropped capabilities and no-new-privileges. The queue worker needs no persistent local data. Only the producer writes its named `/data/outbox` volume. PostgreSQL continues to use its existing named data volume. No Docker socket, host credential directory or original database volume is supplied to the emulator or test tools. Explicit local endpoint validation prevents the test client silently using a real AWS queue; the SDK uses public dummy local signing values, not real credentials. Future AWS mode must use task roles, not these local settings.
+`docker/compose/queue.yaml` is opt-in. Queue and worker ports are not published. All added runtime processes use UID 10001, read-only root filesystems, tmpfs, dropped capabilities and no-new-privileges. The queue worker needs no persistent local data. Only the producer writes its named `/data/outbox` volume. PostgreSQL continues to use its existing named data volume. No Docker socket, host credential directory or original database volume is supplied to the emulator or test tools. Explicit local endpoint validation prevents the test client silently using a real AWS queue; the SDK uses public dummy local signing values, not real credentials. Future AWS mode must use task roles, not these local settings.
 
 `docker/ingestion/Dockerfile` uses compatible pinned Python 3.12 stages, hash-locked `requirements-queue.txt`, dependency installation before explicit source copies, and no development dependencies. It includes only the domain, PostgreSQL and metrics application modules needed by ingestion. Unused SQLite runtime libraries are removed while preserving the other Python library providers; SQLite mode is deliberately unsupported in this image. No SQLite exception is applied to it. The existing API image, dependency lock, application modules and bound Compose configurations remain unchanged; its separately scoped local SQLite acceptance still expires 23 November 2026 at 00:00 UTC and does not authorize AWS use.
 
@@ -745,10 +766,10 @@ The drill creates fresh disposable fixture readings, not a replacement migration
 For a later reviewed local activation, first complete the isolated drill and confirm a current backup. Stop the old direct-writing generator, start the opt-in queue/worker against the same PostgreSQL volume, then run the finite producer. Do not use `down --volumes` or initialize an empty database. Build the separate images before using `--no-build`:
 
 ```bash
-docker compose -f compose.yaml -f compose.postgres.yaml stop generator
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion build worker queue
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion up -d --wait postgres api worker queue
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion run --rm --no-deps generator
+docker compose -f compose.yaml -f docker/compose/postgres.yaml stop generator
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/queue.yaml --profile ingestion build worker queue
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/queue.yaml --profile ingestion up -d --wait postgres api worker queue
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/queue.yaml --profile ingestion run --rm --no-deps generator
 ```
 
 These activation commands are documented for review; this stage does not execute them on the live project. Before returning to direct writes, stop producers, let the worker drain the queue and verify durable processing; preserve unresolved/uncertain IDs and the outbox. Then stop the worker and resume the original generator. Do not stop the in-memory emulator with outstanding messages. This is transport selection with the same PostgreSQL database, not database rollback or a migration. Queue visibility is 120 seconds by default, DLQ routing follows three receives, and the isolated failure drill deliberately shortens visibility to three seconds. Retries can repeat work; they must not create extra readings or incidents.
@@ -786,7 +807,7 @@ A separate analytics service now exposes `/analytics/hourly` and `/analytics/thr
 
 Windows use **UTC, inclusive start/exclusive end**, positive duration and a maximum of seven days. Unknown stations, naive timestamps and invalid ranges return 422. Hourly SQL aggregates produce per-station count and minimum/mean/maximum temperature, humidity and soil moisture, rounded to three decimals. Missing hours are omitted rather than filled with zeros. Thresholds match the application: temperature >=35 C, soil moisture <25 percent. An observation exceeding both contributes once to `any_threshold`. Overall percentages pool observations across stations, rather than averaging station percentages. An empty denominator returns JSON null, not a misleading zero percent. Percentages describe observations, not time outside limits; late readings are included in historical analytics even when they do not replace latest state.
 
-The image uses compatible pinned Python 3.12 stages and the existing hash-locked API requirements before explicit source COPY. It includes only required PostgreSQL/domain modules and the new analytics package; unused SQLite libraries are excluded. No SQLite acceptance is extended to analytics. Runtime UID 10001, read-only rootfs, tmpfs and dropped capabilities are preserved. `compose.analytics.yaml` opts in through the analytics profile, publishes HTTP only at localhost:8002 and leaves metrics private at port 9100. Database transactions are read-only, SQL uses bound values and data queries have a five-second statement timeout. `/health/live` reports process responsiveness; `/health/ready` checks the database uncached. Query failures return generic 503 responses without connection details. Private Prometheus counters/histograms expose outcomes and latency; scraping/dashboard wiring is not yet added for this service.
+The image uses compatible pinned Python 3.12 stages and the existing hash-locked API requirements before explicit source COPY. It includes only required PostgreSQL/domain modules and the new analytics package; unused SQLite libraries are excluded. No SQLite acceptance is extended to analytics. Runtime UID 10001, read-only rootfs, tmpfs and dropped capabilities are preserved. `docker/compose/analytics.yaml` opts in through the analytics profile, publishes HTTP only at localhost:8002 and leaves metrics private at port 9100. Database transactions are read-only, SQL uses bound values and data queries have a five-second statement timeout. `/health/live` reports process responsiveness; `/health/ready` checks the database uncached. Query failures return generic 503 responses without connection details. Private Prometheus counters/histograms expose outcomes and latency; scraping/dashboard wiring is not yet added for this service.
 
 ```bash
 # Safe, new disposable PostgreSQL project with known-value fixtures:
@@ -796,7 +817,7 @@ python3 scripts/checks.py --only configuration
 python3 scripts/checks.py --only scan
 
 # Optional reviewed local activation against your EXISTING PostgreSQL volume:
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml --profile analytics up -d --build postgres analytics
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/analytics.yaml --profile analytics up -d --build postgres analytics
 # Endpoint example (historical fixture window; actual live data can differ):
 curl --get http://127.0.0.1:8002/analytics/thresholds --data-urlencode 'start=2026-01-01T00:00:00Z' --data-urlencode 'end=2026-01-01T02:00:00Z'
 ```
@@ -813,7 +834,7 @@ Cache keys include a schema version, endpoint kind and canonical UTC window/stat
 
 Redis lookup failure falls back to PostgreSQL and suppresses an extra cache-write attempt for that request. Cache-write failure still returns the successful database result. Socket connect/read timeouts are0.2s, SDK retries are disabled, and an additional **0.3s optional-call waiting budget** covers DNS resolution too. A pool plus nonblocking semaphore allows at most **two outstanding cache operations**, including timed-out background calls; no unbounded queue accumulates. Timed-out socket/DNS operations may finish afterward, so the deadline bounds caller waiting rather than forcibly cancelling system DNS. A cache miss can involve separate lookup/write waits plus PostgreSQL connection/query time;0.3s is not a whole-request SLO or a guaranteed outage recovery time. This baseline is not load-tested and has no single-flight cache-miss suppression.
 
-`compose.cache.yaml` opts in after the analytics overlay. Redis has no published host port, no persistent volume, disabled RDB/AOF persistence,16MiB maxmemory with allkeys-lru eviction, a64MiB container limit, bounded local logs and tmpfs. Both added services run non-root with read-only rootfs and dropped capabilities. The cache deliberately contains disposable aggregate results. This credential-free plaintext Redis configuration is for the trusted local synthetic-data Docker network only; protected mode is explicitly disabled for container-to-container access. AWS requires a separately reviewed private ElastiCache TLS/authentication/security-group configuration. No static AWS credentials or Redis password is baked into an image. Existing PostgreSQL passwords stay in their external runtime files.
+`docker/compose/cache.yaml` opts in after the analytics overlay. Redis has no published host port, no persistent volume, disabled RDB/AOF persistence,16MiB maxmemory with allkeys-lru eviction, a64MiB container limit, bounded local logs and tmpfs. Both added services run non-root with read-only rootfs and dropped capabilities. The cache deliberately contains disposable aggregate results. This credential-free plaintext Redis configuration is for the trusted local synthetic-data Docker network only; protected mode is explicitly disabled for container-to-container access. AWS requires a separately reviewed private ElastiCache TLS/authentication/security-group configuration. No static AWS credentials or Redis password is baked into an image. Existing PostgreSQL passwords stay in their external runtime files.
 
 ```bash
 # Full real-Redis/PostgreSQL drill in a NEW guarded disposable project:
@@ -825,8 +846,8 @@ python3 scripts/checks.py --only configuration
 python3 scripts/checks.py --only scan
 
 # Build then add ONLY the two new services against the existing local DB:
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml -f compose.cache.yaml --profile analytics build analytics
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.analytics.yaml -f compose.cache.yaml --profile analytics up -d --no-deps --no-build --wait analytics redis
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/analytics.yaml -f docker/compose/cache.yaml --profile analytics build analytics
+docker compose -f compose.yaml -f docker/compose/postgres.yaml -f docker/compose/analytics.yaml -f docker/compose/cache.yaml --profile analytics up -d --no-deps --no-build --wait analytics redis
 # Explore endpoints and supply explicit date bounds:
 # http://127.0.0.1:8002/docs
 ```

@@ -167,7 +167,7 @@ def main():
         "-f",
         str(ROOT / "compose.yaml"),
         "-f",
-        str(ROOT / "compose.postgres.yaml"),
+        str(ROOT / "docker/compose/postgres.yaml"),
         "-f",
         str(override),
     ]

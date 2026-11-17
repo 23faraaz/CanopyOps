@@ -20,7 +20,7 @@ def main():
     token = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     evidence = {"action": args.action, "started_at": datetime.now(timezone.utc).isoformat()}
     base = ["docker", "compose", "-f", str(ROOT / "compose.yaml")]
-    pg = base + ["-f", str(ROOT / "compose.postgres.yaml")]
+    pg = base + ["-f", str(ROOT / "docker/compose/postgres.yaml")]
 
     def dc(command, *arguments):
         return run(*command, *arguments)
@@ -50,7 +50,7 @@ def main():
 
     def activate_postgres():
         temporary = ROOT / "compose.override.yaml.tmp"
-        shutil.copyfile(ROOT / "compose.postgres.yaml", temporary)
+        shutil.copyfile(ROOT / "docker/compose/postgres.yaml", temporary)
         temporary.replace(ROOT / "compose.override.yaml")
 
     def write_evidence(announce=True):

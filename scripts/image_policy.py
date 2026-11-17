@@ -39,7 +39,7 @@ def scope(root, base_image, runtime):
         "dockerfile_sha256": digest(root / "Dockerfile"),
         "requirements_sha256": digest(root / "app/requirements.txt"),
         "compose_sha256": digest(root / "compose.yaml"),
-        "postgres_compose_sha256": digest(root / "compose.postgres.yaml"),
+        "postgres_compose_sha256": digest(root / "docker/compose/postgres.yaml"),
         "application_sha256": runtime["application_sha256"],
         "sqlite_package": runtime["sqlite_package"],
         "sqlite_version": runtime["sqlite_version"],

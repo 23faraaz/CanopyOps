@@ -1,5 +1,6 @@
 """Demonstrate monitoring failures on disposable PostgreSQL, never original volumes."""
 
+import argparse
 import json
 import subprocess
 import time
@@ -12,6 +13,13 @@ from verify_recovery import decode
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--alerts",
+        action="store_true",
+        help="Verify private Alertmanager webhook delivery, retry and receipt persistence",
+    )
+    alerts_enabled = parser.parse_args().alerts
     run_id = uuid.uuid4().hex
     project = "canopyfaultmonitor" + run_id[:10]
     folder = ROOT / "backups" / ("monitoring-" + run_id)
@@ -20,6 +28,7 @@ def main():
         "run_id": run_id,
         "project": project,
         "status": "running",
+        "alert_delivery_enabled": alerts_enabled,
         "dataset": "new disposable synthetic PostgreSQL readings; not a migration",
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -77,6 +86,18 @@ def main():
     assert identity == "postgres"
     image = "canopyops-monitoring:" + run_id
     execute("docker", "build", "-q", "-t", image, ".")
+    if alerts_enabled:
+        execute(
+            "docker",
+            "build",
+            "-q",
+            "-t",
+            "canopyops-alertmanager:local",
+            str(ROOT / "monitoring/alertmanager"),
+        )
+        report["alertmanager_image"] = execute(
+            "docker", "image", "inspect", "canopyops-alertmanager:local", "--format", "{{.Id}}"
+        ).strip()
     report["test_image"] = execute(
         "docker", "image", "inspect", image, "--format", "{{.Id}}"
     ).strip()
@@ -85,7 +106,11 @@ def main():
     # Extra alias/network permits a metrics-only fault while DB/API traffic continues.
     prometheus_config = folder / "prometheus.yml"
     prometheus_config.write_text(
-        (ROOT / "monitoring/prometheus/prometheus.yml")
+        (
+            ROOT
+            / "monitoring/prometheus"
+            / ("prometheus-alerts.yml" if alerts_enabled else "prometheus.yml")
+        )
         .read_text()
         .replace("api:9100", "api-telemetry:9100")
     )
@@ -165,6 +190,15 @@ networks:
 """,
         encoding="utf-8",
     )
+    if alerts_enabled:
+        overlay.write_text(
+            overlay.read_text().replace(
+                "networks:\n  telemetry: {}\n",
+                "  alert-receiver:\n    image: "
+                + json.dumps(image)
+                + "\nnetworks:\n  telemetry: {}\n",
+            )
+        )
     compose = [
         "docker",
         "compose",
@@ -174,9 +208,10 @@ networks:
         str(ROOT / "compose.yaml"),
         "-f",
         str(ROOT / "compose.postgres.yaml"),
-        "-f",
-        str(overlay),
     ]
+    if alerts_enabled:
+        compose.extend(["-f", str(ROOT / "compose.alerts.yaml"), "--profile", "alerts"])
+    compose.extend(["-f", str(overlay)])
 
     def dc(*args):
         return execute(*compose, *args)
@@ -244,6 +279,26 @@ networks:
             time.sleep(2)
         raise RuntimeError("Timed out: " + label)
 
+    def receipts():
+        return fetch("http://alert-receiver:9080/receipts")
+
+    def delivered(name, status, start=0):
+        return {
+            (alert["fingerprint"], alert["starts_at"])
+            for receipt in receipts()["receipts"][start:]
+            for alert in receipt["alerts"]
+            if alert["alertname"] == name and alert["status"] == status
+        }
+
+    def wait_delivery(name, status, start=0, count=1, expected=None):
+        def ready():
+            found = delivered(name, status, start)
+            return (
+                found if len(found) >= count and (expected is None or expected <= found) else None
+            )
+
+        return wait_for("delivered " + name + " " + status, ready, timeout=90)
+
     progress = (
         'sum(changes(canopy_station_observed_timestamp_seconds{job="canopy-api"}[1m])) or vector(0)'
     )
@@ -259,20 +314,17 @@ networks:
         dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "postgres")
         dc("run", "--rm", "--no-deps", "-T", "migration", "python", "-m", "canopy.migrate")
         dc("run", "--rm", "--no-deps", "-T", "recovery", "init")
-        dc(
-            "up",
-            "-d",
-            "--no-build",
-            "--wait",
-            "--wait-timeout",
-            "180",
-            "api",
-            "generator",
-            "prometheus",
-            "grafana",
-        )
-        for service in ["api", "generator", "postgres", "prometheus", "grafana"]:
+        services = ["api", "generator", "prometheus", "grafana"]
+        if alerts_enabled:
+            services.extend(["alertmanager", "alert-receiver"])
+        dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "180", *services)
+        for service in ["api", "generator", "postgres", "prometheus", "grafana"] + (
+            ["alertmanager", "alert-receiver"] if alerts_enabled else []
+        ):
             _, info = container(service)
+            if service in ["alertmanager", "alert-receiver"]:
+                assert info["Config"]["User"] not in ["", "root", "0", "0:0"]
+                assert info["HostConfig"]["ReadonlyRootfs"]
             bindings = info["HostConfig"]["PortBindings"] or {}
             if service in ["api", "grafana"]:
                 assert all(
@@ -305,6 +357,11 @@ networks:
         save()
         print("PASS: PostgreSQL, four fresh stations, Prometheus and Grafana queries", flush=True)
 
+        if alerts_enabled:
+            processing_receipt_start = receipts()["count"]
+            container("alert-receiver")
+            dc("stop", "-t", "15", "alert-receiver")
+            print("Receiver stopped to exercise Alertmanager notification retry...", flush=True)
         _, generator_info = container("generator")
         dc("stop", "-t", "15", "generator")
         stopped = json.loads(execute("docker", "inspect", generator_info["Id"]))[0]
@@ -315,6 +372,31 @@ networks:
             "Generator stopped; waiting for actual reading ages to exceed 120 seconds...",
             flush=True,
         )
+
+        if alerts_enabled:
+            wait_for(
+                "failed webhook delivery while receiver is stopped",
+                lambda: (
+                    scalar(
+                        'sum(alertmanager_notifications_failed_total{integration="webhook"}) or vector(0)'
+                    )
+                    > 0
+                ),
+                timeout=150,
+            )
+            failed_notifications = scalar(
+                'sum(alertmanager_notifications_failed_total{integration="webhook"}) or vector(0)'
+            )
+            dc("up", "-d", "--no-deps", "--no-build", "--wait", "alert-receiver")
+            processing_fired = wait_delivery(
+                "CanopyProcessingStopped", "firing", processing_receipt_start
+            )
+            report["notification_retry"] = {
+                "receiver_deliberately_stopped": True,
+                "failed_webhook_notifications_observed": failed_notifications,
+                "firing_delivered_after_receiver_restart": True,
+            }
+            save()
 
         def stale():
             health()
@@ -360,6 +442,10 @@ networks:
             flush=True,
         )
 
+        if alerts_enabled:
+            stale_fired = wait_delivery(
+                "CanopyReadingsStale", "firing", processing_receipt_start, count=4
+            )
         dc("start", "generator")
         wait_for(
             "processing and freshness recovery",
@@ -373,12 +459,35 @@ networks:
         }
         save()
 
+        if alerts_enabled:
+            processing_resolved = wait_delivery(
+                "CanopyProcessingStopped",
+                "resolved",
+                processing_receipt_start,
+                expected=processing_fired,
+            )
+            stale_resolved = wait_delivery(
+                "CanopyReadingsStale",
+                "resolved",
+                processing_receipt_start,
+                count=4,
+                expected=stale_fired,
+            )
+            report["delivered_processing_alerts"] = {
+                "processing_firing": len(processing_fired),
+                "processing_matching_resolutions": len(processing_fired & processing_resolved),
+                "stale_station_firings": len(stale_fired),
+                "stale_matching_resolutions": len(stale_fired & stale_resolved),
+            }
+            save()
         api_id, api_info = container("api")
         network = project + "_telemetry"
         metadata = json.loads(execute("docker", "network", "inspect", network))[0]
         assert metadata["Labels"]["com.docker.compose.project"] == project
         original_ip = api_info["NetworkSettings"]["Networks"][network]["IPAddress"]
         before_missing = events()
+        if alerts_enabled:
+            missing_receipt_start = receipts()["count"]
         print("Injecting metrics-network loss in the isolated project...", flush=True)
         execute("docker", "network", "disconnect", network, api_id)
         detached = True
@@ -400,6 +509,8 @@ networks:
             "api_liveness_readiness_dashboard_assets": "HTTP 200",
         }
         save()
+        if alerts_enabled:
+            missing_fired = wait_delivery("CanopyMetricsMissing", "firing", missing_receipt_start)
         metadata = json.loads(execute("docker", "network", "inspect", network))[0]
         assert metadata["Labels"]["com.docker.compose.project"] == project
         container("api")
@@ -423,6 +534,57 @@ networks:
         )
         health()
         report["metrics_recovery"] = {"scrape_up": 1, "telemetry_series": 4, "fresh_stations": 4}
+        if alerts_enabled:
+            missing_resolved = wait_delivery(
+                "CanopyMetricsMissing", "resolved", missing_receipt_start, expected=missing_fired
+            )
+            report["delivered_missing_metrics_alert"] = {
+                "firing": len(missing_fired),
+                "matching_resolutions": len(missing_fired & missing_resolved),
+            }
+            wait_for(
+                "all local alerts resolved",
+                lambda: not query('ALERTS{scope="local-synthetic",alertstate="firing"}'),
+            )
+            before_receipts = receipts()
+            old_receiver, old_info = container("alert-receiver")
+            old_volume = next(m["Name"] for m in old_info["Mounts"] if m["Destination"] == "/data")
+            dc(
+                "up",
+                "-d",
+                "--no-deps",
+                "--no-build",
+                "--force-recreate",
+                "--wait",
+                "alert-receiver",
+            )
+            new_receiver, new_info = container("alert-receiver")
+            assert new_receiver != old_receiver
+            assert (
+                next(m["Name"] for m in new_info["Mounts"] if m["Destination"] == "/data")
+                == old_volume
+            )
+            after_receipts = receipts()
+            assert (
+                after_receipts["receipts"][: before_receipts["count"]]
+                == before_receipts["receipts"]
+            )
+            (folder / "alert-receipts.json").write_text(json.dumps(after_receipts, indent=2))
+            report["receipt_persistence"] = {
+                "container_replaced": True,
+                "named_volume_preserved": True,
+                "count_before": before_receipts["count"],
+                "count_after": after_receipts["count"],
+                "all_previous_receipts_preserved": True,
+                "archive_sha256": after_receipts["sha256"],
+                "receipt_archive": "alert-receipts.json",
+                "external_messages_sent": False,
+            }
+            save()
+            print(
+                "PASS: actual firing/resolved deliveries, notification retry and receipt persistence",
+                flush=True,
+            )
         for service, prior in originals.items():
             identifier = execute("docker", "compose", "ps", "-q", service).strip()
             assert identifier == prior["id"]

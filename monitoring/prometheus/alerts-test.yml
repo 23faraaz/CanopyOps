@@ -1,0 +1,112 @@
+rule_files:
+  - alerts.yml
+evaluation_interval: 5s
+tests:
+  - name: stalled state and real stale threshold then recovery
+    interval: 5s
+    input_series:
+      - series: 'up{job="canopy-api",instance="api:9100"}'
+        values: "1x60"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="north-ridge"}'
+        values: "0x29 150+5x30"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="oak-meadow"}'
+        values: "0x29 150+5x30"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="cedar-valley"}'
+        values: "0x29 150+5x30"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="coastal-grove"}'
+        values: "0x29 150+5x30"
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: CanopyProcessingStopped
+        exp_alerts: []
+      - eval_time: 35s
+        alertname: CanopyProcessingStopped
+        exp_alerts:
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api"}
+      - eval_time: 2m
+        alertname: CanopyReadingsStale
+        exp_alerts: []
+      - eval_time: 140s
+        alertname: CanopyReadingsStale
+        exp_alerts:
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100", "station_id": "north-ridge"}
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100", "station_id": "oak-meadow"}
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100", "station_id": "cedar-valley"}
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100", "station_id": "coastal-grove"}
+      - eval_time: 160s
+        alertname: CanopyReadingsStale
+        exp_alerts: []
+      - eval_time: 160s
+        alertname: CanopyProcessingStopped
+        exp_alerts: []
+      - eval_time: 160s
+        alertname: CanopyMetricsMissing
+        exp_alerts: []
+  - name: scrape failure and recovery
+    interval: 5s
+    input_series:
+      - series: 'up{job="canopy-api",instance="api:9100"}'
+        values: "1x5 0x6 1x20"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="north-ridge"}'
+        values: "0+5x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="oak-meadow"}'
+        values: "0+5x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="cedar-valley"}'
+        values: "0+5x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="coastal-grove"}'
+        values: "0+5x40"
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: CanopyMetricsMissing
+        exp_alerts: []
+      - eval_time: 45s
+        alertname: CanopyMetricsMissing
+        exp_alerts:
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100"}
+      - eval_time: 70s
+        alertname: CanopyMetricsMissing
+        exp_alerts: []
+  - name: missing target series
+    interval: 5s
+    input_series: []
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: CanopyMetricsMissing
+        exp_alerts:
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api"}
+  - name: incomplete station telemetry
+    interval: 5s
+    input_series:
+      - series: 'up{job="canopy-api",instance="api:9100"}'
+        values: "1x20"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="north-ridge"}'
+        values: "0+5x20"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="oak-meadow"}'
+        values: "0+5x20"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="cedar-valley"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: CanopyMetricsMissing
+        exp_alerts:
+          - exp_labels: {"severity": "warning", "scope": "local-synthetic", "component": "canopy-api", "job": "canopy-api", "instance": "api:9100"}
+  - name: do not report processing or stale health when scrape is down
+    interval: 5s
+    input_series:
+      - series: 'up{job="canopy-api",instance="api:9100"}'
+        values: "0x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="north-ridge"}'
+        values: "0x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="oak-meadow"}'
+        values: "0x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="cedar-valley"}'
+        values: "0x40"
+      - series: 'canopy_station_observed_timestamp_seconds{job="canopy-api",instance="api:9100",station_id="coastal-grove"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 180s
+        alertname: CanopyProcessingStopped
+        exp_alerts: []
+      - eval_time: 180s
+        alertname: CanopyReadingsStale
+        exp_alerts: []

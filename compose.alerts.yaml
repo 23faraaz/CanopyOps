@@ -1,0 +1,57 @@
+# Opt-in local delivery only. Merge after base/PostgreSQL configuration.
+services:
+  prometheus:
+    volumes:
+      - ./monitoring/prometheus/prometheus-alerts.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+  alertmanager:
+    image: canopyops-alertmanager:local
+    build:
+      context: ./monitoring/alertmanager
+    profiles: [alerts]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=24h
+      - --cluster.listen-address=
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    expose: ["9093"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9093/-/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 15s
+  alert-receiver:
+    image: canopyops:local
+    profiles: [alerts]
+    command: [python, /checks/alert_receiver.py]
+    environment:
+      RECEIPTS_DIR: /data/alert-receipts
+      MAX_RECEIPT_BYTES: "5242880"
+    volumes:
+      - ./scripts:/checks:ro
+      - alert-receipts:/data
+    expose: ["9080"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9080/health', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    stop_grace_period: 15s
+volumes:
+  alertmanager-data:
+  alert-receipts:

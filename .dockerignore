@@ -38,3 +38,14 @@
 **/*.backup
 **/*.sql
 !canopy/migrations/*.sql
+
+# Separate, explicit queue build inputs; no credentials or exports.
+!requirements-queue.txt
+!docker/
+!docker/ingestion/
+!docker/ingestion/Dockerfile
+!ingestion/
+!ingestion/*.py
+!scripts/
+!scripts/recovery/
+!scripts/recovery/ledger.py

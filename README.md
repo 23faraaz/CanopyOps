@@ -8,7 +8,7 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - PostgreSQL is now the active local database on this checkout. All existing SQLite readings were migrated; they were not regenerated.
 - SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
-- An SQS worker's storage selection now requires PostgreSQL. Its cloud queue integration is not deployed or end-to-end verified. Boto3 remains outside the local runtime dependencies and must be included in a future worker-specific build before using SQS.
+- A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
 - Local and GitHub Actions CI checks are described below. No AWS resources or deployment/CD workflow exist. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
 
 ## Supported Python runtime
@@ -668,3 +668,79 @@ Final patched-image run **`ac23d813d9ba465ea6753d317ab6907b`** passed with clean
 The actual patched Alertmanager image tested was `sha256:2862af0a1a34c58a434e38e0727d4aec25ac3d4649f07cd5ca9863d6a0777e21`, reporting Go 1.27.4 and version 0.35.0-local-net0.62.0. Both-image Trivy scans returned **zero reported HIGH/CRITICAL findings**, with the separate known-SQLite advisory gate still enforcing its existing scoped acceptance. This does not mean the known SQLite vulnerabilities disappeared. All **49 Python tests**, syntax/Ruff, both Dockerfiles' Hadolint, both workflows' actionlint, quiet Compose validation, promtool fixtures and patched amtool checks passed. One existing deprecation warning remains. Selected upstream webhook/configuration tests passed during the Alertmanager build; the entire upstream suite was not run.
 
 An earlier final-drill attempt (`9ee6fb523aea4a07a136cbd3a168f168`) failed before creating test services because Docker reported `getwd: no such file or directory` while validating Compose. The same inputs then validated and the fresh run above passed; that failed attempt is retained locally as troubleshooting evidence. The earlier unpatched-image functional run is not used as proof for the patched image. No raw database dump, receipt archive or diagnostics are committed.
+
+## Local SQS-compatible ingestion milestone
+
+Implemented locally: **finite generator task -> private SQS-compatible emulator -> worker -> PostgreSQL**, with the existing API/dashboard reading PostgreSQL. The planned third application service, analytics, Redis caching, AWS infrastructure and deployment automation are not implemented by this stage. The future ECS layout is API/dashboard, worker and analytics services, with the synthetic generator as a separate finite task. No dashboard split is needed.
+
+`ingestion.worker` is the new queue-runtime entrypoint. It reuses the existing `canopy.domain.Reading` and transactional `PostgresStore`; it does not introduce another event/state database schema. The older `canopy.worker` and `canopy.simulator` entrypoints remain unchanged and are not claimed as the verified queue deployment. The API still starts with `python -m canopy.api`, serves its existing assets and uses localhost port 8001. Existing persisted PostgreSQL and retained SQLite records are not replaced or regenerated.
+
+The worker runs with only the existing writer database secret. The producer has no database secret or database connection: it persists a reading and original event ID in its named outbox volume before send, then uses the same payload for SDK retries and pending-send replay after restart. A process lock prevents concurrent producers sharing an outbox. Finite cycles default to one in the CLI; the demonstration Compose command uses three cycles. Published ledger entries mean queue acknowledgement, not PostgreSQL processing acknowledgement. Keep the outbox outside disposable container storage and archive only after verifying processing; automatic ledger pruning is not implemented.
+
+For a received message, the worker validates the reading, commits event/state changes through PostgreSQL, then deletes the message. Failed processing, uncertain commit acknowledgement and failed deletion leave it available for redelivery. A duplicate ID is acknowledged only after the authoritative writer database returns equivalent validated content on a fresh connection. UTC-equivalent timestamp serializations compare equally; conflicting measurements are flagged and left for dead-letter handling. Global primary-key uniqueness and the existing transaction/station lock protect concurrent insertions. This is database-backed idempotency, not an in-memory deduplication cache or exactly-once SQS delivery.
+
+The conflict check belongs to this queue adapter; the unchanged direct-write storage method still does not flag content differences itself. Existing late-reading behavior is preserved: late observations enter history but do not replace newer state, and identical measurements at later times remain distinct events. Equal-timestamp sequencing/restart strategy remains unresolved; equal timestamps retain the previous state. The four woodland station IDs/names remain unchanged. These limitations must be addressed explicitly before broader cloud processing claims.
+
+The worker exposes private metrics for accepted/duplicate/failed/conflicting attempts, last processing time and heartbeat. Its HTTP metrics health check demonstrates process responsiveness, not successful queue processing or database availability. The existing dashboard's eleven panels and prior alert-delivery evidence remain separate; worker-specific Prometheus scraping, queue-depth/DLQ alerting and dashboard integration are not claimed by this milestone. During database failure, the worker can remain healthy while readings are not advancing.
+
+### Local emulator, images and writable paths
+
+ElasticMQ provides a credential-free SQS-compatible interface for local tests. It is not AWS SQS and does not prove AWS IAM, service durability, throughput or failover. The emulator is **in-memory** in this configuration: replacing/stopping it loses queued and dead-letter messages. The outbox retains original payloads but does not automatically resend records previously acknowledged by a lost emulator. Do not equate emulator acknowledgement with durable cloud queue storage. Dead-letter routing is tested; automated DLQ redrive is not implemented or tested. See the [upstream configuration documentation](https://github.com/softwaremill/elasticmq).
+
+`compose.queue.yaml` is opt-in. Queue and worker ports are not published. All added runtime processes use UID 10001, read-only root filesystems, tmpfs, dropped capabilities and no-new-privileges. The queue worker needs no persistent local data. Only the producer writes its named `/data/outbox` volume. PostgreSQL continues to use its existing named data volume. No Docker socket, host credential directory or original database volume is supplied to the emulator or test tools. Explicit local endpoint validation prevents the test client silently using a real AWS queue; the SDK uses public dummy local signing values, not real credentials. Future AWS mode must use task roles, not these local settings.
+
+`docker/ingestion/Dockerfile` uses compatible pinned Python 3.12 stages, hash-locked `requirements-queue.txt`, dependency installation before explicit source copies, and no development dependencies. It includes only the domain, PostgreSQL and metrics application modules needed by ingestion. Unused SQLite runtime libraries are removed while preserving the other Python library providers; SQLite mode is deliberately unsupported in this image. No SQLite exception is applied to it. The existing API image, dependency lock, application modules and bound Compose configurations remain unchanged; its separately scoped local SQLite acceptance still expires 23 November 2026 at 00:00 UTC and does not authorize AWS use.
+
+The upstream emulator digest initially reported **20 HIGH/CRITICAL package findings**. Available same-distribution vendor fixes were pinned in `monitoring/queue/Dockerfile`: libcrypto3/libssl3 3.5.9-r0, musl/musl-utils 1.2.5-r13 and zlib 1.4-r0. No finding was ignored or accepted. The CI configuration check builds/lints the new images, and its strict scan checks API, Alertmanager, ingestion and the patched emulator separately. Ruff's explicit include list now includes the new ingestion package. No AWS credentials are needed by CI.
+
+### Repeatable local commands
+
+```bash
+# WSL, from /mnt/c/Users/faraa/projects/CanopyOps:
+# Builds and exercises a guarded NEW project/database, never faults the live stack.
+python3 scripts/verify_queue.py
+python3 scripts/checks.py --only python
+python3 scripts/checks.py --only configuration
+python3 scripts/checks.py --only container
+python3 scripts/checks.py --only scan
+```
+
+The drill creates fresh disposable fixture readings, not a replacement migration dataset. It validates unique project/volume/network names against original bindings, uses only its own database for interruptions, records safe summaries under ignored `backups/queue-<run_id>/`, and removes only its successful test resources. Source password files are used only through normal runtime authentication; their contents are not opened, printed or hashed by the controller. Failed tests retain diagnostics. The original stack continues its existing direct-writing generator until an explicit local queue cutover.
+
+For a later reviewed local activation, first complete the isolated drill and confirm a current backup. Stop the old direct-writing generator, start the opt-in queue/worker against the same PostgreSQL volume, then run the finite producer. Do not use `down --volumes` or initialize an empty database. Build the separate images before using `--no-build`:
+
+```bash
+docker compose -f compose.yaml -f compose.postgres.yaml stop generator
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion build worker queue
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion up -d --wait postgres api worker queue
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.queue.yaml --profile ingestion run --rm --no-deps generator
+```
+
+These activation commands are documented for review; this stage does not execute them on the live project. Before returning to direct writes, stop producers, let the worker drain the queue and verify durable processing; preserve unresolved/uncertain IDs and the outbox. Then stop the worker and resume the original generator. Do not stop the in-memory emulator with outstanding messages. This is transport selection with the same PostgreSQL database, not database rollback or a migration. Queue visibility is 120 seconds by default, DLQ routing follows three receives, and the isolated failure drill deliberately shortens visibility to three seconds. Retries can repeat work; they must not create extra readings or incidents.
+
+Before AWS, the local producer outbox needs an explicitly durable cloud equivalent; Fargate task-local files are not a replacement for a Docker named volume. Queue-based cutover controls must stop/fence producers **and** drain/fence consumers, because stopping generation alone does not stop queued database writes. Multi-worker concurrency, emulator queue-outage recovery, worker-specific alert routing and automatic DLQ redrive remain separate unverified exercises.
+
+### Verified queue evidence, 17 November 2026
+
+Final run **`541400eab5a441f592cdac86654d5232`** passed on the patched emulator and final ingestion sources. Safe summaries and timestamped command exit codes remain ignored under `backups/queue-541400eab5a441f592cdac86654d5232/`; runtime image IDs are recorded there. Expected asynchronous probe retries are logged separately from an overall failed drill. No raw diagnostic or outbox file is committed.
+
+| Check | Actual result |
+| --- | --- |
+| Duplicate and ordering fixtures | Three unique events persisted; duplicate ignored; late reading preserved in history; newest state unchanged by late arrival; equal measurements at a later time persisted |
+| Incident behavior | Exactly one incident for the first fixture; duplicate/conflicting content did not create another or change current state |
+| Poison and conflicting messages | Two messages reached DLQ; conflict counter reported three **attempts**, not three distinct conflicting events |
+| Database interruption | Only clone PostgreSQL stopped; message was not acknowledged during failure; one retry event persisted after restart |
+| Commit-before-delete crash | Fixture consumer called the worker processing method, committed, then exited 17 immediately before SDK DeleteMessage; subsequent worker redelivery was a duplicate, with one durable event |
+| Finite generator | Three cycles produced twelve additional synthetic readings through the queue |
+| Final database | **17 events, 17 unique IDs, four station states**, source queue drained |
+| Health/shutdown | API assets and both health endpoints passed; worker graceful stop exit code **0** |
+| Original data isolation | Original API/generator/PostgreSQL IDs and volume bindings unchanged; no original-volume mounts; live direct-writing generator not stopped |
+| Cleanup | Only the successful isolated project resources removed |
+
+Producer pending-send replay after an acknowledgement-loss exception is additionally covered by a fixture test reopening its ledger and checking the unchanged original payload/ID. That is not a claim of a separately injected network acknowledgement loss against AWS SQS. Complete local syntax, Ruff (including ingestion), all **57 pytest tests**, four Dockerfiles' lint, workflow/Compose/rule validation and image checks passed; one existing deprecation warning remains. The real PostgreSQL/SQS failure drill is operator-run, not CI coverage. CI runs fixtures and builds/scans images without real database credentials.
+
+All four local runtime scans returned zero reported HIGH/CRITICAL findings after the emulator patch. The original API's separately tracked known SQLite exceptions remain visible and unchanged. No new exception, expiry extension or cloud acceptance was added. Image sizes measured through Docker inspect were **33,199,145 bytes** (API), **49,300,251 bytes** (ingestion) and **35,576,943 bytes** (patched emulator); these are Docker's reported image sizes, not transfer or billable-storage measurements.
+
+The API container regression check also passed persistence after replacement, dashboard/assets, private metrics, non-root/read-only execution and shutdown. Its layer-cold build was **15.13 s**, cached build **2.54 s**, and source-only build **2.66 s**, with dependency installation reused. Layer-cold means `--no-cache`; base-image and pip download caches could already be warm. The ingestion Dockerfile installs its locked dependencies before source; cached dependency installation was observed during source rebuilds, without treating the API timings as ingestion timings.
+
+Troubleshooting retained an early Docker `getwd: no such file or directory` build failure before test services were created; rerunning from a freshly resolved WSL working directory succeeded. The fixture's explicit PYTHONPATH and polling-status reporting were corrected during development. Earlier runs are retained locally; the final run above is the acceptance evidence. Live transport activation, multi-worker concurrency, analytics, Redis, AWS and zero-downtime release claims remain unfinished.

@@ -43,8 +43,8 @@ def python_checks():
         "sh",
         "-ec",
         "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
-        "python --version; python -m pip check; python -m compileall -q canopy scripts tests; python -m ruff check canopy scripts tests; "
-        "python -m ruff format --check canopy scripts tests; "
+        "python --version; python -m pip check; python -m compileall -q canopy ingestion scripts tests; python -m ruff check canopy ingestion scripts tests; "
+        "python -m ruff format --check canopy ingestion scripts tests; "
         "python -m pytest -q -p no:cacheprovider --basetemp /tmp/canopy-tests",
     )
 
@@ -97,6 +97,50 @@ def configuration_checks():
         "config",
         "--quiet",
     )
+    run(
+        "docker",
+        "compose",
+        "-f",
+        str(ROOT / "compose.yaml"),
+        "-f",
+        str(ROOT / "compose.postgres.yaml"),
+        "-f",
+        str(ROOT / "compose.queue.yaml"),
+        "--profile",
+        "ingestion",
+        "config",
+        "--quiet",
+    )
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'docker/ingestion/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
+    )
+    run(
+        "docker",
+        "build",
+        "-t",
+        "canopyops-ingestion:local",
+        "-f",
+        str(ROOT / "docker/ingestion/Dockerfile"),
+        str(ROOT),
+    )
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'monitoring/queue/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
+    )
+    run("docker", "build", "-t", "canopyops-queue:local", str(ROOT / "monitoring/queue"))
     prometheus = re.search(
         r"image: (prom/prometheus:\S+)", (ROOT / "compose.yaml").read_text()
     ).group(1)
@@ -144,6 +188,18 @@ def configuration_checks():
 def container_checks():
     # Explicit base Compose in this harness ignores the local PG activation override.
     run(sys.executable, str(ROOT / "scripts/verify_docker.py"))
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "canopyops-ingestion:local",
+        "python",
+        "-c",
+        "import boto3,psycopg; from ingestion.worker import Repository; from pathlib import Path; "
+        "assert not Path('/usr/lib/libsqlite3.so.0').exists(); print('PostgreSQL/SQS imports passed; SQLite runtime library excluded')",
+    )
     # Inspect image file paths only; never open potential secret or database files.
     code = """import importlib.util, pathlib
 for module in ['ruff', 'pytest', 'httpx', 'boto3']:
@@ -265,55 +321,62 @@ def scan_checks():
         evidence.write_text(json.dumps(summary, indent=2))
         print("Known SQLite advisory gate: " + json.dumps(policy), flush=True)
         scan.check_returncode()
-        run("docker", "save", "-o", str(archive), "canopyops-alertmanager:local")
-        alert_scan = run(
-            "docker",
-            "run",
-            "--rm",
-            "--mount",
-            f"type=bind,source={directory},target=/scan",
-            *identity,
-            "--env",
-            "HOME=/tmp",
-            TRIVY,
-            "image",
-            "--input",
-            "/scan/image.tar",
-            "--cache-dir",
-            "/scan/cache",
-            "--no-progress",
-            "--scanners",
-            "vuln",
-            "--severity",
-            "HIGH,CRITICAL",
-            "--exit-code",
-            "1",
-            "--format",
-            "json",
-            "--output",
-            "/scan/alertmanager.json",
-            check=False,
-        )
-        alert_report = json.loads((Path(directory) / "alertmanager.json").read_text())
-        summary["alertmanager_scan"] = {
-            "exit_code": alert_scan.returncode,
-            "findings": [
-                {
-                    "id": v["VulnerabilityID"],
-                    "package": v["PkgName"],
-                    "installed": v["InstalledVersion"],
-                    "fixed": v.get("FixedVersion", ""),
-                }
-                for r in alert_report.get("Results", [])
-                for v in r.get("Vulnerabilities", [])
-            ],
-        }
-        evidence.write_text(json.dumps(summary, indent=2))
-        print(
-            "Alertmanager HIGH/CRITICAL gate: " + json.dumps(summary["alertmanager_scan"]),
-            flush=True,
-        )
-        alert_scan.check_returncode()
+        for image, key in [
+            ("canopyops-alertmanager:local", "alertmanager_scan"),
+            ("canopyops-ingestion:local", "ingestion_scan"),
+            ("canopyops-queue:local", "queue_emulator_scan"),
+        ]:
+            run("docker", "save", "-o", str(archive), image)
+            extra_scan = run(
+                "docker",
+                "run",
+                "--rm",
+                "--mount",
+                f"type=bind,source={directory},target=/scan",
+                *identity,
+                "--env",
+                "HOME=/tmp",
+                TRIVY,
+                "image",
+                "--input",
+                "/scan/image.tar",
+                "--cache-dir",
+                "/scan/cache",
+                "--no-progress",
+                "--scanners",
+                "vuln",
+                "--severity",
+                "HIGH,CRITICAL",
+                "--exit-code",
+                "1",
+                "--format",
+                "json",
+                "--output",
+                f"/scan/{key}.json",
+                check=False,
+            )
+            report_path = Path(directory) / (key + ".json")
+            if not report_path.is_file():
+                extra_scan.check_returncode()
+                raise RuntimeError("Trivy produced no additional-image report")
+            extra_report = json.loads(report_path.read_text())
+            summary[key] = {
+                "image": image,
+                "exit_code": extra_scan.returncode,
+                "findings": [
+                    {
+                        "id": v["VulnerabilityID"],
+                        "package": v["PkgName"],
+                        "installed": v["InstalledVersion"],
+                        "fixed": v.get("FixedVersion", ""),
+                    }
+                    for r in extra_report.get("Results", [])
+                    for v in r.get("Vulnerabilities", [])
+                ],
+            }
+            evidence.write_text(json.dumps(summary, indent=2))
+            print("Additional runtime HIGH/CRITICAL gate: " + json.dumps(summary[key]), flush=True)
+            extra_scan.check_returncode()
         if policy["blocked_cves"]:
             raise RuntimeError(
                 "Unaccepted known SQLite advisories remain; a clean Trivy report does not override them"

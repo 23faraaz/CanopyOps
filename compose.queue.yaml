@@ -1,0 +1,57 @@
+# Opt-in local ingestion. Existing PostgreSQL data is never reset.
+services:
+  queue:
+    image: canopyops-queue:local
+    build:
+      context: ./monitoring/queue
+    profiles: [ingestion]
+    user: "10001:10001"
+    volumes:
+      - ./monitoring/queue/elasticmq.conf:/opt/elasticmq.conf:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["9324"]
+    stop_grace_period: 15s
+  worker:
+    image: canopyops-ingestion:local
+    build:
+      context: .
+      dockerfile: docker/ingestion/Dockerfile
+    profiles: [ingestion]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: canopy
+      PGUSER: canopy_writer
+      PGPASSWORD_FILE: /run/secrets/pg_writer
+      QUEUE_LOCAL: "1"
+      SQS_ENDPOINT_URL: http://queue:9324
+      SQS_QUEUE_NAME: canopy-readings
+    secrets: [pg_writer]
+    depends_on:
+      postgres: {condition: service_healthy}
+      queue: {condition: service_started}
+    restart: on-failure
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    expose: ["9100"]
+    stop_grace_period: 90s
+  generator:
+    image: canopyops-ingestion:local
+    profiles: [producer]
+    command: [python, -m, ingestion.producer, --cycles, "3", --interval, "2"]
+    environment: !override
+      QUEUE_LOCAL: "1"
+      SQS_ENDPOINT_URL: http://queue:9324
+      SQS_QUEUE_NAME: canopy-readings
+    secrets: !reset []
+    volumes: !override
+      - queue-outbox:/data
+    depends_on: !override
+      queue: {condition: service_started}
+    network_mode: !reset null
+volumes:
+  queue-outbox:

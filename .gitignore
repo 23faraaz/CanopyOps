@@ -40,3 +40,15 @@ backups/
 
 # Local runtime data; never publish database records.
 /data/
+
+# Terraform local inputs, CLI overrides and diagnostics are not source.
+*.tfvars
+*.tfvars.json
+*.tfplan*
+.terraformrc
+terraform.rc
+crash.log
+crash.*.log
+*.tfstate*
+!*.tfvars.example
+!*.tfvars.json.example

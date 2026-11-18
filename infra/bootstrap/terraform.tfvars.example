@@ -1,0 +1,6 @@
+project_name      = "canopyops"
+environment       = "demo"
+aws_region        = "eu-west-2"
+state_bucket_name = "canopyops-demo-tfstate-23faraaz"
+# Fictional identity; replace privately with your exact IAM user ARN.
+terraform_operator_arn = "arn:aws:iam::123456789012:user/example-user"

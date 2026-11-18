@@ -9,7 +9,7 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
 - A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
-- Local and GitHub Actions CI checks are described below. No AWS resources or deployment/CD workflow exist. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
+- Local and GitHub Actions CI checks are described below. AWS currently contains only the Terraform state bootstrap (S3 protections and a demo IAM role/policy); application deployment and deployment/CD workflows are not implemented. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
 
 ## Repository layout
 
@@ -33,9 +33,11 @@ monitoring/               # Prometheus, Grafana and local alert routing
 scripts/                  # Operator commands and verification tools
 tests/                    # Application/guard regression tests
 security/                 # Explicit risk controls and review proposals
+infra/                    # Demo backend and empty future module scaffolds
+  bootstrap/              # Applied state bucket protections and demo IAM role
 ```
 
-Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform infrastructure will be added separately when its first real configuration is implemented.
+Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap; the parent infra configuration currently declares only its backend and version constraints. Module files are empty learning scaffolds, not implemented infrastructure.
 
 For Python-only development from the checkout root, use the existing virtual environment and the source path explicitly:
 
@@ -66,6 +68,63 @@ The base and all five overlay contents are unchanged. Seven effective configurat
 Validation passed: 75 Python tests, syntax/Ruff checks, Dockerfile/workflow lint, Compose configuration, alert fixtures and image builds. A fresh isolated `python3 scripts/verify_analytics.py --cache` run verified calculations, expiry, fallback, database interruption and graceful shutdown; its resources were removed afterward. The live read-only `python3 scripts/verify_local_endpoints.py` check passed for dashboard assets, both APIs, health, metrics, Grafana and Redis. Four stations were fresh and persisted events advanced from 36,440 to 36,444. Original container IDs and volume bindings were unchanged.
 
 Raw local evidence remains ignored under `backups/compose-layout-52562ddbfe7747e1acfcc1a414ee2d3b/`, `backups/analytics-c53fbe88843a4981a9041469464d3ff5/` and the endpoint verifier's timestamped directory. These checks establish local behaviour, not AWS deployment or availability.
+
+## Terraform authentication and remote-state baseline (18 November 2026)
+
+One demo environment in `eu-west-2`. Terraform CLI is constrained to `~> 1.17.2`; both root configurations lock AWS provider 6.73.0. AWS CLI 2.50.4 was reported working in WSL. This stage creates no application infrastructure and changes no readings, database volumes, application code or image-risk acceptance.
+
+### Local authentication and permission boundaries
+
+| Local profile | Purpose |
+| --- | --- |
+| `23faraaz` | Browser-based `aws login` session; temporary credentials |
+| `canopy-terraform` | `credential_process` bridge to that login; bootstrap administrator |
+| `canopy-demo` | Assumes `canopyops-demo-terraform-role` through the bridge |
+
+Profile configuration and login caches live outside Terraform source. No keys, tokens or actual operator ARN are committed. Renew an expired browser session using `/usr/local/bin/aws login --profile 23faraaz`. Do not invoke `export-credentials` interactively or paste its output: the bridge consumes it internally. GitHub OIDC is a later, separate automation identity; IAM Identity Center/Organizations was not enabled for this work.
+
+The owner reports MFA enabled for the IAM user on 18 November. The current role trust policy does **not** enforce an MFA condition; browser MFA does not automatically restrict pre-existing access keys. Original access-key retirement has not been verified. The source administrator identity retains broad permissions and can bypass the demo role's restrictions; temporary credentials do not reduce those permissions.
+
+Bootstrap manages the role and policy, so the demo role cannot edit its own permissions. Its trust policy names the operator supplied privately through `terraform_operator_arn`. Its inline policy permits prefix-scoped bucket listing, GetObject/PutObject on the exact demo state key, and GetObject/PutObject/DeleteObject on its exact `.tflock`. It grants no DeleteObject on state, no bootstrap-prefix access and no infrastructure provisioning permissions. This is one demo role with a separate state policy; add scoped deployment policies incrementally rather than creating an unnecessary backend-only role.
+
+### Separate state roots
+
+Both use bucket `canopyops-demo-tfstate-23faraaz`, SSE-S3 (`AES256`), and `use_lockfile = true`:
+
+| Root | State key | Local execution profile |
+| --- | --- | --- |
+| `infra/bootstrap/` | `canopyops/bootstrap/terraform.tfstate` | `canopy-terraform` |
+| `infra/` | `canopyops/demo/terraform.tfstate` | `canopy-demo` |
+
+The parent configuration does not inherit bootstrap variables or provider configuration. Root main/provider/variable/output files and future modules remain empty until their learning stages. Backend authentication is separate from AWS provider authentication; command-scoped `AWS_PROFILE` currently selects the intended identity for both. Backend settings contain no credentials.
+
+### Commands, results and limits
+
+The following evidence was reported during the interactive WSL walkthrough, not collected by CI or rerun against AWS for this commit:
+
+- Browser login, process bridge and role assumption succeeded. Bootstrap plans using the bridge and a demo plan using the restricted role reported no changes.
+- The demo role listed `canopyops/demo/` successfully (initially empty); listing `canopyops/bootstrap/` returned AccessDenied. This verifies listing restrictions only, not all negative object-permission cases.
+- Before migration, local state was copied into a timestamped `$HOME/canopyops-state-backups/` directory outside Git (directory mode 0700, backup mode 0600) and compared successfully with `cmp`. This backup uses filesystem permissions, not encryption. A resource-address inventory contained seven resources: five S3 resources, one role and one inline policy.
+- The destination bootstrap prefix was empty. After writing its backend, `AWS_PROFILE=canopy-terraform terraform init -migrate-state` migrated the existing state. The subsequent plan reported no changes. The walkthrough prescribed an inventory comparison, but its no-diff output was not independently supplied; repeat that comparison before claiming complete content equivalence.
+- `head-object` on bootstrap state confirmed nonzero size, AES256 and a version ID. Only metadata was requested; state contents were not printed.
+- The console-based lock probe was inconclusive. A later plan received S3 HTTP 412 and reported an existing plan lock. No jobs or Terraform processes were found in the tested WSL distribution; after the operator checked for other owners, force-unlock cleared the stale lock. A subsequent no-change plan succeeded and `head-object` on the lock returned 404 afterward. Lock rejection, stale-lock recovery and absence of a lock after a completed plan were observed. A controlled two-process contention test with the original holder releasing normally remains unverified; do not repeat suspension on the real bootstrap state to finish documentation.
+- The demo root initialised using `canopy-demo`, validated and produced a no-change plan. The root is empty; this is not evidence of deployed services or complete deployment permissions.
+
+Repeat safe checks from the checkout root:
+
+```bash
+terraform fmt -check -recursive infra
+terraform -chdir=infra/bootstrap validate
+terraform -chdir=infra validate
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan -lock-timeout=5s
+AWS_PROFILE=canopy-demo terraform -chdir=infra plan -lock-timeout=5s
+```
+
+Run plans deliberately in the intended account; no apply is needed to record this stage. Preserve local backups and remote version history. Do not commit state, `.terraform/`, saved plans, actual `.tfvars`, AWS configuration or login caches. Commit both provider lock files and only non-secret example inputs. Bootstrap and demo `terraform validate` both passed locally for this commit. Existing PR checks cover the application/container milestone; Terraform format/validation are local checks for this stage, not a claimed Terraform CI pipeline.
+
+`prevent_destroy` is a Terraform planning safeguard while the resource remains configured. It does not prevent direct AWS deletion, and removing the resource from configuration removes that safeguard. Ordinary application teardown must leave the bootstrap bucket and its state intact. S3 bucket management, object access and lock deletion permissions are distinct. See [HashiCorp backend permissions](https://developer.hashicorp.com/terraform/language/backend/s3#permissions-required) and [AWS browser-login guidance](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
+
+Next: design/cost the no-NAT network, then implement the network module. ECS, ECR, ALB/WAF/ACM, RDS, Redis, SQS and GitHub OIDC deployment are not provisioned. Estimate the complete short rehearsal against the $20-30 budget before applying paid infrastructure; no current estimate or savings claim is supplied here.
 
 ## Supported Python runtime
 

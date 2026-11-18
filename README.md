@@ -33,11 +33,11 @@ monitoring/               # Prometheus, Grafana and local alert routing
 scripts/                  # Operator commands and verification tools
 tests/                    # Application/guard regression tests
 security/                 # Explicit risk controls and review proposals
-infra/                    # Demo backend and empty future module scaffolds
+infra/                    # Demo backend, rehearsed network module and future scaffolds
   bootstrap/              # Applied state bucket protections and demo IAM role
 ```
 
-Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap; the parent infra configuration currently declares only its backend and version constraints. Module files are empty learning scaffolds, not implemented infrastructure.
+Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap. The parent infra configuration calls a network module whose creation and teardown were exercised in AWS using the demo role. The network is now torn down; bootstrap remains. The remaining modules are empty learning scaffolds.
 
 For Python-only development from the checkout root, use the existing virtual environment and the source path explicitly:
 
@@ -96,7 +96,7 @@ Both use bucket `canopyops-demo-tfstate-23faraaz`, SSE-S3 (`AES256`), and `use_l
 | `infra/bootstrap/` | `canopyops/bootstrap/terraform.tfstate` | `canopy-terraform` |
 | `infra/` | `canopyops/demo/terraform.tfstate` | `canopy-demo` |
 
-The parent configuration does not inherit bootstrap variables or provider configuration. Root main/provider/variable/output files and future modules remain empty until their learning stages. Backend authentication is separate from AWS provider authentication; command-scoped `AWS_PROFILE` currently selects the intended identity for both. Backend settings contain no credentials.
+The parent configuration does not inherit bootstrap variables or provider configuration. At this bootstrap-only checkpoint, root main/provider/variable/output files and future modules were empty; the network stage below records their later implementation. Backend authentication is separate from AWS provider authentication; command-scoped `AWS_PROFILE` currently selects the intended identity for both. Backend settings contain no credentials.
 
 ### Commands, results and limits
 
@@ -124,7 +124,45 @@ Run plans deliberately in the intended account; no apply is needed to record thi
 
 `prevent_destroy` is a Terraform planning safeguard while the resource remains configured. It does not prevent direct AWS deletion, and removing the resource from configuration removes that safeguard. Ordinary application teardown must leave the bootstrap bucket and its state intact. S3 bucket management, object access and lock deletion permissions are distinct. See [HashiCorp backend permissions](https://developer.hashicorp.com/terraform/language/backend/s3#permissions-required) and [AWS browser-login guidance](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
 
-Next: design/cost the no-NAT network, then implement the network module. ECS, ECR, ALB/WAF/ACM, RDS, Redis, SQS and GitHub OIDC deployment are not provisioned. Estimate the complete short rehearsal against the $20-30 budget before applying paid infrastructure; no current estimate or savings claim is supplied here.
+The subsequent network lifecycle stage is recorded below. ECS, ECR, ALB/WAF/ACM, RDS, Redis, SQS and GitHub OIDC deployment are not provisioned. Estimate the complete short rehearsal against the $20-30 budget before applying paid infrastructure; no current estimate or savings claim is supplied here.
+
+### Network-permission draft: local verification (18 November 2026)
+
+`infra/bootstrap/network_permissions.tf` now describes lifecycle access for the current 18-resource network plan only: VPC/DNS, six subnets, internet gateway, tier route tables, public default route and subnet associations. The existing demo-state policy is unchanged. Four resource-type entries generate explicit creation, creation-tagging, existing-resource and name-update statements; shared conditions avoid duplicated ownership rules. Region/account ARNs and ownership tags constrain writes. Subnet and route-table creation require a valid Tier tag. Individual route writes require the public tier. Existing-resource tag updates permit only Name, so the demo role cannot relabel ownership or Tier using this policy. Terraform changes to those protected tags require a deliberate bootstrap-administrator review.
+
+This is tag-based scope, not an exact list of future resource IDs. Multiple resources with matching ownership tags qualify. Read-only discovery remains region-wide. Association operations can change relationships among owned resources, so IAM alone does not establish the intended private-subnet routing; review plans and inspect actual associations after deployment. No NAT, instances, endpoints, security groups, ECR, ECS, RDS, IAM management or S3 access is added by this network policy.
+
+Local `terraform validate` and formatting passed. A provider-mocked, plan-only test ran in a temporary source-only clone with fictional inputs, no backend, no local variable files and no real state. Nine boundary assertions passed; the fixture rendered 18 IAM statements (7,620 characters), or 8,201 characters combined with its state policy, below the 10,240-character role inline-policy quota. All action/resource/condition combinations were checked against the public AWS EC2 service-authorization reference. A local evaluator passed 115 representative allow/deny cases (wrong account/region/ownership, creation tags, ownership-tag mutation, multi-resource operations, public-only route writes and unrelated service actions). That evaluator is not AWS IAM simulation and does not establish live authorization or account-level policy effects. Safe raw results remain ignored at `backups/network-policy-322a8a86924e405991addc6a55b310cb/`.
+
+Repeat the mocked regression test without creating resources:
+
+```bash
+terraform -chdir=infra/bootstrap fmt -check
+terraform -chdir=infra/bootstrap validate
+terraform -chdir=infra/bootstrap test -filter=tests/network_permissions.tftest.hcl
+```
+
+The tests use a mocked AWS provider and explicit fictional values. The owner subsequently applied the role-tag and network-policy updates and created all 18 network resources using the demo role. Pasted AWS inspection results showed the expected subnet CIDRs/AZs/tags and public-only internet default route. VPC creation dry runs accepted the expected tags and rejected a wrong environment and missing ManagedBy tag. The reviewed destroy plan contained only the 18 network resources. Its execution removed the gateway, route, route tables and associations, then failed before deleting six subnets because the provider requires ec2:DescribeNetworkInterfaces during its ENI dependency check. At that point teardown was incomplete, with six subnets and the VPC expected to remain. The completed recovery and final teardown are recorded below.
+
+The source repair adds only ec2:DescribeNetworkInterfaces to the existing region-limited discovery statement, with no ENI deletion/detachment grants. An added regression assertion checks that distinction. Formatting, isolated source-only validation and all 10 mock boundary assertions passed with a fixed non-secret child environment and temporary empty HOME; no real local inputs, state, credential files, login caches or inherited environment values were inspected. Safe results are ignored at backups/network-eni-read-fix-b3d8c2c3549f45fdb5569e9915d031aa/. The agent did not apply the repair or inspect credentials; the owner ran the authenticated operations. A later bootstrap no-change plan and successful final subnet deletion confirmed the repaired configuration was effective. The owner requires explicit permission before agent tools access credentials. Preserve state after partial failures and regenerate destroy plans; old saved plans can be stale, and normal network applies recreate deleted resources. Do not use administrator credentials to bypass demo-role teardown failures. Paid-service estimation remains a separate prerequisite for later services.
+
+### Network lifecycle: completed AWS rehearsal
+
+The owner supplied terminal evidence for creation, inspection and teardown using `canopy-demo` temporary assumed-role credentials. The root configuration implements a VPC, six subnets, internet gateway, three tier route tables, public default route and six associations: **18 Terraform-managed resources**. Root inputs feed the network module; a tier map and nested for expressions generate stable subnet keys, `for_each` creates subnets/tables/associations, and module outputs expose IDs as maps. Common Project/Environment/ManagedBy provider tags are consistent across demo and bootstrap; Name and Tier remain resource-specific. `infra/terraform.tfvars.example` contains non-secret example values; actual inputs remain ignored.
+
+Observed evidence:
+
+- The reviewed network plan and apply reported 18 additions, no changes or deletions. AWS inspection showed six non-overlapping /24 subnet ranges within 10.42.0.0/16 across eu-west-2a/eu-west-2b; automatic public IP assignment was false on all six and the intended tags were present.
+- Each public/app/data table had its two intended subnet associations. Only the public table had an active 0.0.0.0/0 route to the internet gateway. App/data and the untagged AWS-created main table had local routing only. The later destroy-plan refresh showed both VPC DNS support and hostnames true. These observations establish network configuration, not application reachability or availability.
+- VPC-creation dry runs returned DryRunOperation for correct ownership tags and UnauthorizedOperation for a wrong environment and missing ManagedBy. These are specific positive/negative checks, not proof of all IAM boundaries.
+- Initial teardown removed 11 resources before the provider's ENI discovery call failed. A later AWS inspection showed replacement route-table IDs: removed components had been recreated while the original VPC/subnets remained. A normal creation plan saved under a repair filename and a concatenated shell command caused troubleshooting confusion; a later repair-plan apply was rejected as stale. We do not have a complete command history proving precisely when recreation occurred. Explicit `terraform -chdir=...` paths and fresh scoped plans were used to separate bootstrap IAM work from network teardown.
+- After the region-scoped DescribeNetworkInterfaces repair was effective, a fresh reviewed destroy plan and apply reported **0 added, 0 changed, 18 destroyed**. The supplied log showed every subnet and the VPC deleted, no addresses printed between `terraform state list` and the next command, AWS InvalidVpcID.NotFound for the original VPC, and a subsequent bootstrap plan reporting **No changes**. Bootstrap state/bucket/IAM resources were outside the network destroy plan.
+
+The final plan/apply/verification attachment was reviewed for Terraform result lines only; credentials, login caches, real variable files, environment values and raw state were not inspected by the agent. Raw attachment paths are local evidence rather than committed logs. Final source checks for this commit passed in temporary clones with no real backends or local inputs, empty HOME directories and fixed non-secret child environments: bootstrap and demo formatting/validation, plus all 10 mock policy assertions. Safe local results are ignored under backups/network-stage-final-a41dced3c950406da162d42e716fe428/. The network has not been recreated after this successful teardown. A normal root plan should propose the network again; that is expected while its configuration remains. No create/destroy pipeline exists yet.
+
+The network-only resource list contained no NAT gateway, interface endpoints, public IP allocations, compute, load balancer or database. VPC/subnet/routing resources and the internet gateway add no hourly network-service component; state S3 storage, versions and requests remain metered. No account-wide zero-cost, measured savings or actual-spend claim is made. See [VPC pricing FAQ](https://aws.amazon.com/vpc/faqs/) and [internet gateway guidance](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html). Price later paid services against the $20-30 rehearsal budget before applying them.
+
+Next verified stages: add Terraform formatting/validation/lint/security automation; then ECR/OIDC image publishing and reviewed plan/deploy/manual-destroy workflows against the small stack. Later ingress must include Terraform-requested ACM certificates, managed DNS validation, HTTPS and WAF. Keep application publishing, Terraform release ownership and bootstrap teardown protection separate. RDS migration must preserve existing PostgreSQL records. Controlled lock contention, comprehensive IAM negative tests, paid-service estimates, application migration, availability/recovery measurements and cloud Multi-AZ exercises remain outstanding.
 
 ## Supported Python runtime
 

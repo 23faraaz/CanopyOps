@@ -52,3 +52,6 @@ crash.*.log
 *.tfstate*
 !*.tfvars.example
 !*.tfvars.json.example
+
+# Reusable child modules use the calling root provider lock file.
+/infra/modules/**/.terraform.lock.hcl

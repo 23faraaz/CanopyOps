@@ -1,0 +1,12 @@
+project_name = "canopyops"
+environment  = "demo"
+aws_region   = "eu-west-2"
+
+# Confirm these zones are available in the intended account.
+availability_zones = ["eu-west-2a", "eu-west-2b"]
+
+# Review overlap with any connected network before deployment.
+vpc_cidr                  = "10.42.0.0/16"
+public_subnet_cidrs        = ["10.42.0.0/24", "10.42.1.0/24"]
+private_app_subnet_cidrs   = ["10.42.10.0/24", "10.42.11.0/24"]
+isolated_data_subnet_cidrs = ["10.42.20.0/24", "10.42.21.0/24"]

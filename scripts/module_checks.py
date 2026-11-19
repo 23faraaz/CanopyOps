@@ -1,4 +1,4 @@
-"""Check the five application modules using source-only, credential-free workspaces.
+"""Check infrastructure modules using source-only, credential-free workspaces.
 
 Never copies or opens tfvars, tfvars.example, environment, state or credential files.
 Mock plans use inline fictional test inputs. Requires Linux/WSL and Docker.
@@ -17,7 +17,7 @@ import uuid
 from terraform_checks import TERRAFORM, TFLINT, TRIVY
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ("queue", "database", "cache", "ecs-service", "ingress")
+MODULES = ("queue", "database", "cache", "ecs-service", "ingress", "network-security")
 
 
 def sources(module, destination):

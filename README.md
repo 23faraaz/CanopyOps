@@ -1810,11 +1810,40 @@ From `infra/modules/network-security`:
 python3 ../../../scripts/module_checks.py --module network-security
 ```
 
-This module is not called by the root configuration yet. Public ALB 80/443 ingress,
-S3-prefix-list HTTPS egress for image layers, actual private endpoint resources and
+This module is not called by the root configuration yet. Public ALB ingress is
+covered by the following milestone. S3-prefix-list HTTPS egress for image layers,
+actual private endpoint resources and
 policies, and optional collector-only metrics access remain separate work. Keep
 those flows explicit; do not introduce allow-all egress to make startup work.
 Review the root plan guard and narrowly scoped IAM before connecting/applying new
 resource types. No AWS changes or application connectivity claims accompany this
 source milestone. Verification uses inline fictional inputs without local variable
 files or AWS credentials.
+
+
+### ALB public ingress source milestone
+
+`network-security/public_ingress.tf` adds two separate `for_each` rules, keyed by
+`http` and `https`, targeting only the ALB group on TCP 80 and 443. The input
+`alb_ingress_ipv4_cidr` defaults to `0.0.0.0/0` for the intended public website and
+can be narrowed for a restricted rehearsal. It validates IPv4 syntax; IPv6 is not
+implicitly opened. No public rule targets the API, analytics, worker, database,
+cache, endpoints or metrics ports. Existing SG-to-SG connection rules are unchanged.
+
+The security group permits HTTP; it does not implement an HTTP redirect or provide
+TLS itself. The existing ingress module configures HTTP-to-HTTPS redirects and an
+ACM-backed HTTPS listener. Those modules still need reviewed root wiring and live
+verification before public service or secure-connectivity claims.
+
+The network-security checker now passes eight mock cases: the original five plus
+ALB-only public web ports, configurable restricted clients and rejection of IPv6
+in the IPv4 input. Module formatting, provider validation, TFLint and the strict
+HIGH/CRITICAL scan passed locally, with no new scanner exception. Re-run using
+`python3 scripts/module_checks.py --module network-security` from the repository
+root, or `python3 ../../../scripts/module_checks.py --module network-security`
+from the module directory. These are source/mock checks without local variable
+files or AWS credentials, not live reachability tests.
+
+No AWS changes were applied. Next add explicit S3 managed-prefix-list HTTPS egress,
+then private endpoint resources/policies; retain the separate IAM/plan-guard review
+before root wiring and deployment.

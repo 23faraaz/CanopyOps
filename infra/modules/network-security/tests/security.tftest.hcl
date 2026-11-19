@@ -99,3 +99,30 @@ run "alb_reaches_only_application_ports" {
     error_message = "ALB outbound rules must reach API 8000 and analytics 8081 only."
   }
 }
+
+run "public_ingress_is_only_alb_web_ports" {
+  command = plan
+  assert {
+    condition = length(aws_vpc_security_group_ingress_rule.alb_public) == 2 && toset([for rule in aws_vpc_security_group_ingress_rule.alb_public : rule.from_port]) == toset([80, 443]) && alltrue([
+      for rule in aws_vpc_security_group_ingress_rule.alb_public :
+      rule.security_group_id == aws_security_group.this["alb"].id &&
+      rule.cidr_ipv4 == "0.0.0.0/0" && rule.cidr_ipv6 == null &&
+      rule.referenced_security_group_id == null && rule.prefix_list_id == null &&
+      rule.ip_protocol == "tcp" && rule.from_port == rule.to_port
+    ])
+    error_message = "Public rules must target only ALB TCP 80/443, never a private service or metrics port."
+  }
+}
+run "restrict_rehearsal_clients_without_changing_service_rules" {
+  command = plan
+  variables { alb_ingress_ipv4_cidr = "203.0.113.0/24" }
+  assert {
+    condition     = alltrue([for rule in aws_vpc_security_group_ingress_rule.alb_public : rule.cidr_ipv4 == "203.0.113.0/24" && rule.security_group_id == aws_security_group.this["alb"].id]) && alltrue([for rule in aws_vpc_security_group_ingress_rule.connection : rule.cidr_ipv4 == null && rule.cidr_ipv6 == null])
+    error_message = "Restricting ALB clients must not add CIDR access to private services."
+  }
+}
+run "reject_ipv6_in_ipv4_input" {
+  command = plan
+  variables { alb_ingress_ipv4_cidr = "::/0" }
+  expect_failures = [var.alb_ingress_ipv4_cidr]
+}

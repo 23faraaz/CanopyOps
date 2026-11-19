@@ -7,6 +7,7 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - FastAPI dashboard/API: `python -m canopy.api`, laptop http://127.0.0.1:8001.
 - PostgreSQL is now the active local database on this checkout. All existing SQLite readings were migrated; they were not regenerated.
 - SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
+- A separate `docker/cloud-api/Dockerfile` builds a PostgreSQL-only API serving image. The root Dockerfile retains SQLite and migration/recovery tooling for local use; the running local stack is unchanged.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
 - A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
 - Local and GitHub Actions CI checks are described below. AWS currently contains only the Terraform state bootstrap (S3 protections and a demo IAM role/policy); application deployment and deployment/CD workflows are not implemented. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
@@ -26,7 +27,9 @@ docker/
   compose/                # postgres, analytics, cache, queue and alerts overlays
   ingestion/Dockerfile
   analytics/Dockerfile
-Dockerfile                # API image recipe
+  cloud-api/Dockerfile     # PostgreSQL-only API serving image
+  cloud-api/storage.py     # Cloud-only storage selector; shared PostgreSQL implementation
+Dockerfile                # Local API and SQLite migration/recovery image
 compose.yaml              # Root orchestration entry point
 postgres/                 # Database role bootstrap
 monitoring/               # Prometheus, Grafana and local alert routing
@@ -38,6 +41,84 @@ infra/                    # Demo backend, rehearsed network module and future sc
 ```
 
 Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap. The parent infra configuration calls a network module whose creation and teardown were exercised in AWS using the demo role. The network is now torn down; bootstrap remains. The remaining modules are empty learning scaffolds.
+
+## PostgreSQL-only API image and resource comparison
+
+`docker/cloud-api/Dockerfile` is a separate serving recipe, not a replacement for the local recovery image. Both use the same digest-pinned Python 3.12 base, hash-locked `app/requirements.txt`, shared API/PostgreSQL/domain code, static assets and health-check schedule. The cloud recipe copies a small PostgreSQL-only storage selector over the local selector, avoiding an upfront SQLite import without changing the existing local application's approved risk scope. It rejects other backends. SQLite's Python package, extension and native library are removed from the cloud runtime; transfer/audit/migration utilities are excluded. The original root image remains available for SQLite export, backup and recovery. This is packaging separation, not a change to existing persisted records or migration evidence.
+
+Dependencies are installed before source in a builder virtual environment, then copied to the compatible runtime stage. Locked binary wheels mean no compiler is needed; multi-stage separation controls what is copied, rather than implying large savings from removing nonexistent build tools. UID/GID 10001 runs `python -m canopy.api`. Application files remain root-owned and non-writable by that user. The API listens on port 8000; metrics listen on port 9100 without a host publication. The cloud API has no `/data` directory or local database volume. Verification runs with a read-only root filesystem, dropped capabilities and a 16 MiB `/tmp` tmpfs. PostgreSQL owns persistent data outside the API container. No secret is supplied through a build ARG, COPY or image ENV.
+
+```bash
+# WSL, repository root. These checks create their own disposable database:
+python3 scripts/verify_cloud_runtime.py --smoke
+# Or test the exact already-built artifact (also used by CI):
+python3 scripts/verify_cloud_runtime.py --smoke --image canopyops-api:postgres
+# Full comparison: three repetitions per image/allocation, strict scans and public prices:
+python3 scripts/verify_cloud_runtime.py
+# Build only; no existing database or running service is changed:
+docker build -f docker/cloud-api/Dockerfile -t canopyops-api:postgres .
+```
+
+The verifier copies tracked application sources and explicit build inputs into a temporary context. It does not use Compose, actual `.tfvars`, host `.env`, secret files, AWS profiles or existing Docker credential configuration. Child commands receive a literal environment and empty temporary HOME/Docker config. Fixture PostgreSQL uses trust authentication only on a new internal Docker network, with no database host port; the API additionally joins a separate network for random loopback-only HTTP publication. This credential-free fixture is never a deployment configuration. Only labelled, uniquely named fixture resources are removed; original volumes are never mounted. Raw results/build logs/scans remain ignored under `backups/cloud-runtime-*/`.
+
+The cloud smoke check covers imports without SQLite/Boto3/development tools, non-writable application files, Docker health, dashboard JS/CSS, both health endpoints, private metrics, duplicate suppression, late observations, incidents, identical measurements at different times, denied reader DELETE, readiness failure while liveness stays healthy, data preservation across API replacement and graceful shutdown. The full comparison additionally exercises the existing local tooling through PostgreSQL export -> SQLite backup -> import into a separate fresh PostgreSQL database, comparing complete manifests. This synthetic fixture round trip does not repeat or replace the original real-data migration, its 28.14-second timing bound, or its separate rollback evidence.
+
+CI source now wires cloud Dockerfile lint/build, Python checks, the disposable PostgreSQL smoke test and a separate strict HIGH/CRITICAL scan into the existing `checks` job. The cloud image receives no SQLite exception. The unchanged local image still has the three explicitly accepted, local-only SQLite advisories until 23 November 2026 00:00 UTC; raw scanner success does not override that gate. Python 3.12 is the supported container version; no unsupported-version matrix is introduced.
+
+The local workload offers 10 HTTP requests/second for 15 seconds, with four client threads and at most eight outstanding requests. Its mix is 60% overview, 20% history and 10% each readiness/liveness. A separate fixture actor commits two readings/second directly through the transactional PostgreSQL store. Each trial starts from 40 events/four states, verifies all 30 additional readings and the latest state, and samples API CPU/memory every 0.5 seconds. Three shuffled repetitions compare both images at 0.5 vCPU/1024 MiB and 0.25 vCPU/512 MiB. Predeclared local acceptance requires no failed/dropped requests, p95 <= 500 ms, sampled memory <= 75% and CPU p95 <= 80% of allocation. A completed comparison can contain rejected allocations; `local_acceptance_passed` and the capacity decision must be checked separately from script completion.
+
+These short shared-host Docker trials are screening evidence, not a production capacity forecast. They use small synthetic tables, not the existing full dataset, and do not exercise SQS, the worker, analytics, Redis, TLS or ECS. Startup measures Docker create/start through HTTP health with the image already local, not an ECS image-pull or release duration. Instruction-cold builds use `--no-cache` but can reuse base/download caches. Docker image size and gzip-compressed Docker exports are recorded separately; gzip exports are not ECR compressed-size measurements. Deleting inherited files does not remove their bytes from lower image layers ([Docker layers](https://docs.docker.com/get-started/docker-concepts/building-images/understanding-image-layers/)).
+
+Before deployment, repeat the chosen workload on ECS with the migrated database and real worker path, then measure request errors/latency, durable processing, reading freshness and queue recovery during both a healthy release and an intentionally failed release. Rolling overlap, ALB health/routing, draining, SIGTERM and tested rollback determine release availability; image size cannot establish zero downtime. Compare any smaller allocation against both image variants before attributing savings. Fargate charges for allocated CPU/memory and time starting with image download ([AWS pricing](https://aws.amazon.com/fargate/pricing/)). Actual AWS spend and ECS availability remain unmeasured.
+
+Keep Fargate as the initial deployment choice. A cheaper EC2 option is a later comparison of total host capacity, all three services, idle time, patching and operational work; no EC2 saving is claimed or EC2 infrastructure added here. Before provisioning paid services, estimate the complete London stack, including endpoints, ALB/WAF, Redis and RDS, against the $20–30 rehearsal budget. Limit paid sessions and tear down application infrastructure afterward. Secure RDS connectivity still requires private networking, verified TLS/CA trust, scoped runtime roles and runtime secrets; this fixture does not verify those controls. Application publishing to encrypted ECR via OIDC, Terraform plan/deploy and a separate manual destroy workflow remain subsequent stages, with Terraform owning deployed immutable digests.
+
+Existing application gaps remain visible: four woodland station IDs, no event sequence/restart strategy, and the direct `PostgresStore` duplicate path does not compare conflicting payloads for an existing ID. The separately implemented queue repository's conflict handling is not evidence that every direct-write path does so. No domain/schema behavior is changed in this packaging stage.
+
+The next automation stages remain separate, focused commits:
+
+1. Add Terraform format/validation, lint and security checks. Independent checks can run in parallel; a matrix can cover the bootstrap/demo roots, without implying support for extra Python versions.
+2. Add encrypted, immutable ECR repositories and scoped GitHub OIDC roles. Review the Terraform plan and costs before applying. No static AWS keys or cloud SQLite waiver.
+3. Application publishing workflow: parallel unit/lint checks, then parallel build/scan jobs for the cloud API, worker and analytics. Publish the exact scanned artifacts only after required checks pass, retaining immutable digests. Pull requests receive no publishing credentials.
+4. Terraform infrastructure workflow: checks -> plan -> reviewed apply -> deployed-version/end-to-end checks. Terraform remains the owner of desired ECS image digests. Automatically request and DNS-validate ACM certificates before configuring HTTPS. Private RDS/Redis, endpoint networking and all paid services require a complete cost review first.
+5. Separate manual Terraform destroy workflow with a protected environment, explicit demo confirmation and serialization against deployment. Keep bootstrap/state storage outside application teardown; use the existing native S3 lock.
+6. Rehearse a successful rolling release and an unhealthy release with rollback while measuring HTTP traffic and durable processing. Compare the locally qualified Fargate allocation with an ECS baseline; record actual spend and teardown. Evaluate EC2 only if its total capacity and operational trade-offs justify changing the baseline. Do not label the deployment zero downtime before these measurements pass.
+
+### Results from 18 November 2026
+
+The controlled comparison passed build/cache, functional, recovery-tooling and strict scan checks in `backups/cloud-runtime-305481f159b64e19a6098900aeed3e08/`. Python was **3.12.16, x86_64**. Both raw Trivy scans reported zero HIGH/CRITICAL findings against the same advisory database snapshot; the known local SQLite exceptions were separately checked and remain unchanged. No cloud exception was used. All **1,800 offered HTTP requests** completed successfully, and all **360 newly submitted fixture readings** were durably verified. Every API trial shut down with exit0 and no OOM kill. The smaller allocations nevertheless failed the declared CPU-headroom threshold.
+
+| Build observation | Existing local image | PostgreSQL-only cloud image |
+| --- | ---: | ---: |
+| Docker-reported `.Size`, bytes | 33,199,181 | 33,230,207 |
+| Gzip Docker export, bytes; not registry size | 33,044,115 | 33,073,525 |
+| Instruction-cold build, seconds | 16.690 | 16.368 |
+| Cached build, seconds | 1.081 | 1.524 |
+| Source-only rebuild, seconds | 1.146 | 2.036 |
+| Dependency installation remained cached after source change | Yes | Yes |
+
+The cloud image was **31,026 bytes larger**, not smaller. These are Docker's reported size values, not independently measured unpacked filesystems. The useful outcome is an unavailable SQLite runtime and a narrower serving package; no image-size saving, speed improvement or cloud-cost reduction is claimed.
+
+| Image / allocation | Local acceptance | Ready time range, seconds | Worst trial p95 HTTP, ms | Maximum idle / load memory sample, MiB | CPU p95 range, % of allocation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Local, 0.5 vCPU / 1024 MiB | 3/3 passed | 3.77–4.07 | 23.28 | 48.84 / 55.41 | 16.61–19.97 |
+| Cloud, 0.5 vCPU / 1024 MiB | 3/3 passed | 3.85–4.03 | 22.66 | 49.27 / 53.82 | 18.61–19.98 |
+| Local, 0.25 vCPU / 512 MiB | 0/3 passed | 12.10–13.11 | 200.04 | 43.21 / 58.83 | 99.15–109.72 |
+| Cloud, 0.25 vCPU / 512 MiB | 0/3 passed | 12.10–13.45 | 120.54 | 42.44 / 54.68 | 97.57–101.30 |
+
+CPU is calculated from cgroup CPU-time deltas between samples, normalized to allocation; short quota windows can yield samples above100%. Memory numbers are sampled container usage, not a guarantee of the true lifetime peak. The justified next candidate is **0.5 vCPU / 1 GiB for an ECS rehearsal**, not an approved production size. The 0.25-vCPU result does not prove that allocation can never work; it did not meet this test's headroom criterion.
+
+The public [AWS London price catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/eu-west-2/index.json), retrieved at23:25UTC, gave Linux x86 on-demand rates of **$0.04656/vCPU-hour** and **$0.00511/GB-hour**. The candidate's API compute is therefore **$0.02839/hour**, approximately **$0.2271 for eight hours**. The rejected smaller allocation would be$0.014195/hour; that is not an accepted saving. These estimates exclude every other task/service, storage/networking, public IP and tax. No AWS task was deployed and no actual bill was measured.
+
+Troubleshooting evidence is retained separately: an initial fixture import needed an explicit `/app` Python path, an internal-only Docker network could not publish the API port, and reusing a fixed source-change marker falsely reused an earlier cache probe. Unique markers now prove that the source layer rebuilds while dependencies stay cached. An exploratory comparison had unequal10/30-second health schedules, so its capacity results were discarded and all12 controlled trials above were repeated with identical30-second schedules. The public pricing parser was corrected to accept the catalog's `hours` unit and has a regression fixture. The current verifier labels Docker's size field without assuming it is an independently measured uncompressed size. These corrections do not change migration records or the original cutover evidence.
+
+Final checks passed Python 3.12.16 syntax, Ruff lint/format, dependency consistency, Hadolint and **84 unit tests**; one existing Starlette/httpx deprecation warning remains. The exact scanned and benchmarked artifact is tagged `canopyops-api:postgres`, image ID `sha256:2e4857b52d45adcccc82586db0aa08add35372c906c59c3d368211cf6042edb3`. Final `--smoke --image canopyops-api:postgres` run `305727f58e6d4b86b9b02088be35b233` passed against that artifact, including source-identical dashboard assets, Docker health and metrics scraped from a separate private container. CI uses this prebuilt-image option to test the same artifact it subsequently scans. Existing localhost ports 8001 and 8002 still returned 200 for both health endpoints. Final artifact/HTTP results are retained in `backups/cloud-runtime-final-artifact-checks.json`.
+
+The comparison report's ambiguous size-field name was corrected to describe Docker's reported `.Size` without changing any measurements. Its original is retained alongside the corrected report. No existing database, migration evidence or risk acceptance was changed.
+
+The fixture now waits for PostgreSQL over loopback TCP: the image's temporary initialization server accepts Unix sockets before initialization finishes, so socket-only readiness could race role/schema creation. Exact-artifact smoke run `0b2b649a0f9b407493a8d8efdd3a09dc` passed after this test-only hardening. The initial [PR CI run](https://github.com/23faraaz/CanopyOps/actions/runs/44424868596) passed Python, configuration, container and strict scan checks; current-head checks and review are available in [PR #15](https://github.com/23faraaz/CanopyOps/pull/15).
+
+## Python development
 
 For Python-only development from the checkout root, use the existing virtual environment and the source path explicitly:
 

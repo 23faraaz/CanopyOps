@@ -43,13 +43,32 @@ def python_checks():
         "sh",
         "-ec",
         "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r app/requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
-        "python --version; python -m pip check; python -m compileall -q app scripts tests; python -m ruff check app scripts tests; "
-        "python -m ruff format --check app scripts tests; "
+        "python --version; python -m pip check; python -m compileall -q app scripts tests docker/cloud-api/storage.py; python -m ruff check app scripts tests docker/cloud-api/storage.py; "
+        "python -m ruff format --check app scripts tests docker/cloud-api/storage.py; "
         "python -m pytest -q -p no:cacheprovider --basetemp /tmp/canopy-tests",
     )
 
 
 def configuration_checks():
+    run(
+        "docker",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'docker/cloud-api/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
+    )
+    run(
+        "docker",
+        "build",
+        "-t",
+        "canopyops-api:postgres",
+        "-f",
+        str(ROOT / "docker/cloud-api/Dockerfile"),
+        str(ROOT),
+    )
     run(
         "docker",
         "run",
@@ -240,6 +259,13 @@ def configuration_checks():
 
 
 def container_checks():
+    run(
+        sys.executable,
+        str(ROOT / "scripts/verify_cloud_runtime.py"),
+        "--smoke",
+        "--image",
+        "canopyops-api:postgres",
+    )
     # Explicit base Compose in this harness ignores the local PG activation override.
     run(sys.executable, str(ROOT / "scripts/verify_docker.py"))
     run(
@@ -376,6 +402,7 @@ def scan_checks():
         print("Known SQLite advisory gate: " + json.dumps(policy), flush=True)
         scan.check_returncode()
         for image, key in [
+            ("canopyops-api:postgres", "cloud_api_scan"),
             ("canopyops-alertmanager:local", "alertmanager_scan"),
             ("canopyops-ingestion:local", "ingestion_scan"),
             ("canopyops-queue:local", "queue_emulator_scan"),

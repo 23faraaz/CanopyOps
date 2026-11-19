@@ -17,6 +17,9 @@
 !docker/ingestion/Dockerfile
 !docker/analytics/
 !docker/analytics/Dockerfile
+!docker/cloud-api/
+!docker/cloud-api/Dockerfile
+!docker/cloud-api/storage.py
 !scripts/
 !scripts/recovery/
 !scripts/recovery/ledger.py

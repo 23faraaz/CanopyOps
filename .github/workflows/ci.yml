@@ -37,10 +37,22 @@ jobs:
           PY
   terraform:
     uses: ./.github/workflows/terraform-static.yml
+  modules:
+    name: Application Terraform module contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Module formatting, mock tests, lint and strict security checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/module_checks.py --ci-plugin-token
   checks:
     name: checks
     if: ${{ always() }}
-    needs: [application, terraform]
+    needs: [application, terraform, modules]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -48,3 +60,4 @@ jobs:
         run: |
           test '${{ needs.application.result }}' = success
           test '${{ needs.terraform.result }}' = success
+          test '${{ needs.modules.result }}' = success

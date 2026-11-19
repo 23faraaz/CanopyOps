@@ -1482,9 +1482,9 @@ network; teardown intentionally does not erase its Terraform source.
 
 ### Proposed ECS design and rehearsal budget ? 19 November 2026
 
-This is a design estimate, not an applied deployment or measured bill. The network
-and ECR modules have implementation; ECS service, database, cache, queue and ingress
-resource files are scaffolds. The reviewed network was torn down after the workflow
+This is a design estimate, not an applied deployment or measured bill. At this design checkpoint, network and ECR had implementation while ECS service,
+database, cache, queue and ingress were scaffolds. Their subsequent source-only
+implementation is documented below; they remain disconnected from the root. The reviewed network was torn down after the workflow
 rehearsal. No application AWS resources are created by this documentation change.
 
 ```text
@@ -1592,3 +1592,118 @@ its presence in a Dockerfile alone does not prove cross-run cache reuse. This wa
 source inspection, not a new image build or filesystem-size measurement. No Dockerfile
 was changed. References: [Docker cache mounts](https://docs.docker.com/build/cache/optimize/),
 [pip caching](https://pip.pypa.io/en/stable/topics/caching/).
+
+
+### Application Terraform modules ? implemented source, not deployed
+
+The five previously empty modules now contain resources, validated inputs, outputs,
+provider contracts and mock tests. `infra/main.tf` still calls only the network
+module. No AWS plan/apply, credential/profile use, database write or runtime service
+change was performed for this implementation. Local `.tfvars` and `.tfvars.example`
+files were not opened. Inputs below are contracts to fill/review later, not evidence
+that dependency resources already exist.
+
+| Module | Implemented behavior | Required caller dependencies |
+| --- | --- | --- |
+| `queue` | Standard SSE-SQS reading queue, longer-lived DLQ, source-only redrive permission and HTTPS-only queue policies | Name/tag namespace; later scoped producer/worker IAM |
+| `database` | Private encrypted PostgreSQL, Multi-AZ by default, TLS enforcement, AWS-managed admin password, seven-day backups, retained automated backups and required final snapshot | Isolated subnets, scoped SGs, reviewed engine version, unique final snapshot name and a regional log KMS key |
+| `cache` | Private Redis OSS replication group with mandatory TLS and one reviewed RBAC group; one node normally, two only when explicitly selected | Private data subnets, SGs, reviewed version and separately provisioned restricted RBAC group |
+| `ecs-service` | Reusable Fargate service with digest-only ECR image, non-root/read-only container, private networking, bounded logs, health/draining controls and deployment circuit-breaker rollback | The same shared cluster for all three callers, separate task/execution roles, private app subnets, SGs, log KMS key and verified release digest |
+| `ingress` | Terraform-created/DNS-validated ACM certificate, HTTPS ALB, HTTP redirects, API/analytics host routing, IP target groups, WAF and bounded/redacted WAF logs | Owned domain, existing authoritative Route 53 zone, public ALB subnets, scoped SGs, regional log KMS key and retained ALB log bucket |
+
+Module naming uses a lowercase project/environment `name_prefix`. `Name`, `Service`
+and `ManagedBy` tags are explicit; provider `default_tags` supplies the existing
+`Project` and `Environment` convention, with optional caller tags. `for_each` gives
+stable identities to queues' policies, log groups, host routes and certificate DNS
+records. A single shared cluster remains a caller dependency, not one new cluster
+per module call. No environment-specific CIDRs or actual account inputs are embedded
+in these new modules.
+
+The ECS module owns listener settings and preserves each image's existing command:
+API `python -m canopy.api` on 8000; analytics on 8081; worker process metrics on 9100.
+API/analytics target groups use `/health/ready`; task checks use liveness, and the
+worker task check only proves the metrics HTTP server responds. It does not prove
+processing progress or fresh readings. Metrics ports are not ALB targets and HTTPS
+`/metrics` paths are explicitly denied. API and analytics use separate hostnames,
+so the analytics docs do not require an unimplemented URL-prefix rewrite.
+
+Tasks run as UID/GID 10001, drop Linux capabilities and use a read-only root with no
+unreviewed writable mounts. New temporary-write requirements must be identified and
+verified before connecting these definitions to live tasks. In particular, the
+finite generator is not a long-running service: its durable outbox/writable storage
+and restart strategy still need an explicit Fargate design, or a reviewed external
+producer. No ephemeral task filesystem is presented as persistent application data.
+
+`environment_variables` in the ECS module means non-secret container settings, not
+the root's deployment-environment string. Obvious credential-setting names, duplicate
+secret/settings names and reserved listener overrides are rejected. That name check
+is not general secret detection: callers must still review all settings. `secrets`
+contains Secrets Manager/SSM ARN references only; the execution role must be scoped
+to those exact runtime secrets. No secret versions are read into Terraform. RDS
+manages its admin password in Secrets Manager, and only the secret ARN is exported;
+application identities must use separate SQL roles and runtime secrets, never that
+administrative identity.
+
+Integration gaps remain explicit:
+
+- Analytics currently creates its Redis client without TLS/user authentication.
+  Add and verify TLS/CA/RBAC support and failure fallback before using this cache.
+  The module cannot verify that a supplied RBAC group disables unrestricted default
+  access or limits commands/keys; review that group separately.
+- PostgreSQL supports runtime libpq password injection and SSL mode, but the cloud
+  image still needs verified RDS CA distribution and `verify-full` configuration.
+  `rds.force_ssl` enforces encryption, not client-side server identity verification.
+- SQL reader/writer/migrator permissions, schema migration, existing-data transfer,
+  backup restoration and application-level smoke/recovery checks remain separate
+  application/database operations. A snapshot input supports a separate PostgreSQL
+  restore rehearsal; it does not migrate SQLite records.
+- Before wiring these modules, implement/review SGs, no-NAT endpoints, cluster and
+  scoped roles, the log bucket's regional ALB-delivery policy/SSE-S3/HTTPS/lifecycle,
+  log-key policies and secret/RBAC provisioning. No domain has been purchased.
+- Refresh the cost estimate for required log keys, logs, cache snapshots, final RDS
+  snapshots/retained backups and extra tasks. RDS and ALB deletion protection defaults
+  to enabled. Teardown requires a separately reviewed protection change and fresh
+  destroy plan; retained backups/log storage can continue billing afterward.
+- The current automation deliberately accepts only the original network resource
+  kinds. New resources require reviewed IAM and sanitized plan-review changes before
+  root calls are added. Its 900-second session is not assumed sufficient for database
+  provisioning or certificate validation; review session/job limits and split stages.
+- Terraform keeps ownership of task-definition releases. Circuit-breaker settings
+  and rolling overlap target safe release behavior but do not prove zero downtime.
+  Rollback requires a previous completed release. Later deployment verification must
+  check the actual running digest after a rollback and update the desired Terraform
+  release deliberately; a stable service alone is not proof the new image deployed.
+
+The strict scanner's intentional-public-ALB check has one resource-local exception:
+`AVD-AWS-0053` on `ingress/aws_lb.this`, expiring **19 December 2026**. The project
+requires public HTTPS ingress; task/database/cache networks remain private, and
+scoped SGs, HTTPS, WAF and access logging are required before deployment. This is
+not a vulnerability waiver. Negative controls remove, expire and move that marker
+on temporary source copies and require the public-ALB finding to fail the gate.
+The HTTP listener was changed to an HTTPS redirect rather than ignoring its scanner
+finding. HIGH/CRITICAL gating remains enabled with no global ignored checks.
+
+Repeatable module-only verification in WSL:
+
+```bash
+python3 scripts/module_checks.py
+# Optional focused checks:
+python3 scripts/module_checks.py --module ecs-service --only validate
+python3 scripts/module_checks.py --only lint
+python3 scripts/module_checks.py --module ingress --only security
+```
+
+The checker copies only `.tf`, `.tftest.hcl`, the public provider lock and lint
+configuration into a private temporary workspace. It never opens or copies tfvars,
+input examples, environment files, actual state or credentials. Provider/plugin
+installation uses public network downloads; validation and all mock plans run with
+network disabled, no AWS credential mounts/forwarding, and inline fictional inputs.
+On CI only, `--ci-plugin-token` forwards the job's read-only GitHub token exclusively
+to TFLint plugin installation to avoid anonymous API rate limits. No AWS permission
+is granted. Logs and summaries remain locally under ignored `backups/module-checks-*`.
+
+The new module-contract job runs alongside the existing application and root
+Terraform checks and is included in required `checks`. The 28 positive/negative mock
+cases cover security/recovery/configuration contracts; they do not verify regional
+service availability, DNS ownership, live connection behavior, deployed health,
+release rollback or spend. No successful cloud application deployment is claimed.

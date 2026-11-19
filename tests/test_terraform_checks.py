@@ -112,3 +112,43 @@ def test_source_symlink_is_rejected_before_copy(tmp_path, monkeypatch):
     directory.mkdir()
     with pytest.raises(ValueError, match="source symlink"):
         terraform_checks.Checks("infra", directory)
+
+
+def test_lint_token_reaches_installer_only(tmp_path, monkeypatch):
+    checks = object.__new__(terraform_checks.Checks)
+    checks.root = "infra/bootstrap"
+    calls = []
+    monkeypatch.setattr(checks, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    checks.lint(github_token="synthetic-test-token")
+    assert calls[0][0][0] == "lint-init"
+    assert calls[0][1]["github_token"] == "synthetic-test-token"
+    assert calls[0][1]["network"] == "bridge"
+    assert all("github_token" not in kwargs and "network" not in kwargs for _, kwargs in calls[1:])
+
+
+def test_installer_token_is_not_in_arguments_or_recorded_output(tmp_path, monkeypatch):
+    checks = object.__new__(terraform_checks.Checks)
+    checks.root = "infra/bootstrap"
+    checks.directory = tmp_path
+    checks.evidence = tmp_path
+    checks.results = {"steps": []}
+    checks.docker = ["docker"]
+    checks.env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    calls = []
+    token = "synthetic-test-token"
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="installer output " + token)
+
+    monkeypatch.setattr(terraform_checks.subprocess, "run", fake_run)
+    checks.run("installer", "pinned-image", ["--init"], github_token=token)
+    args, kwargs = calls[0]
+    assert token not in args
+    assert ["--env", "GITHUB_TOKEN"] == args[-4:-2]
+    assert kwargs["env"]["GITHUB_TOKEN"] == token
+    assert token not in (tmp_path / "installer.log").read_text()
+    assert "[REDACTED]" in (tmp_path / "installer.log").read_text()
+    checks.run("offline-lint", "pinned-image", [])
+    assert "GITHUB_TOKEN" not in calls[1][1]["env"]
+    assert calls[1][0][calls[1][0].index("--network") + 1] == "none"

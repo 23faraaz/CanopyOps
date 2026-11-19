@@ -1198,3 +1198,10 @@ Local verification on 19 November 2026 built and scanned all three PostgreSQL-on
 The isolated Python suite passed 118 tests, including artifact tampering, stale scans, non-root enforcement and simulated publishing without a rebuild. All three Terraform roots passed formatting, validation, TFLint and security checks; mocked plans verified repository settings, trust and permission boundaries. Mocked authorization checks are not live AWS authorization tests.
 
 AWS ECR repositories and the publisher role have not been applied in this stage. Real provider inventory, plans, approved cost review, OIDC assumption, immutable-tag rejection and ECR push verification remain pending. Inventory must check for an existing GitHub OIDC provider and registry-level scanning settings before applying. The separate registry state avoids recreating the previously torn-down application network. Terraform deploy and manual destroy workflows remain subsequent stages, not implemented deployment claims.
+
+
+## TFLint plugin-download rate limit
+
+An earlier main CI run at `b4b8fc0` failed during `tflint --init`: GitHub returned HTTP403 for the shared runner IP's unauthenticated release-metadata quota. The Docker image downloaded successfully; this was not a Terraform lint finding.
+
+CI now explicitly passes its built-in, read-only job token only to the pinned TFLint plugin installer. Docker receives it by environment-variable name rather than command-line value. Captured installer output is redacted before recording evidence; subsequent lint containers receive no token and run without networking. The helper only reads that named token when `--only lint --github-token-from-env` is explicitly selected. Normal local checks remain token-free. No personal access token, AWS credentials or stored repository secret is needed. Authentication raises the API quota but cannot guarantee GitHub availability; download failure still fails the check. See [TFLint's rate-limit guidance](https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting).

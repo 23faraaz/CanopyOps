@@ -45,3 +45,18 @@ variable "github_publish_environment" {
   type        = string
   default     = "ecr-publish"
 }
+
+
+variable "github_oidc_subject_prefix" {
+  description = "Exact immutable repository subject prefix reported by GitHub, without the environment suffix; public metadata, not a token"
+  type        = string
+  default     = "repo:23faraaz@213287679/CanopyOps@1459330795"
+
+  validation {
+    condition = (
+      can(regex("^repo:[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", var.github_oidc_subject_prefix)) &&
+      replace(var.github_oidc_subject_prefix, "/@[0-9]+/", "") == "repo:${var.github_repository}"
+    )
+    error_message = "Use the exact immutable owner/repository prefix for github_repository; wildcards and environment suffixes are forbidden."
+  }
+}

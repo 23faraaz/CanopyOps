@@ -35,7 +35,7 @@ run "publisher_boundaries" {
   assert {
     condition = jsondecode(aws_iam_role.github_publisher[0].assume_role_policy).Statement[0].Condition.StringEquals == {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-      "token.actions.githubusercontent.com:sub" = "repo:23faraaz/CanopyOps:environment:ecr-publish"
+      "token.actions.githubusercontent.com:sub" = "repo:23faraaz@213287679/CanopyOps@1459330795:environment:ecr-publish"
     }
     error_message = "Trust must match the exact audience, repository and protected environment."
   }
@@ -91,4 +91,21 @@ run "create_provider_when_explicitly_enabled" {
     condition     = length(aws_iam_openid_connect_provider.github) == 1 && aws_iam_openid_connect_provider.github[0].client_id_list == toset(["sts.amazonaws.com"])
     error_message = "Only the GitHub provider with the intended audience should be created when needed."
   }
+}
+
+
+run "reject_wildcard_subject" {
+  command = plan
+  variables {
+    github_oidc_subject_prefix = "repo:23faraaz@213287679/*@1459330795"
+  }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_other_repository_subject" {
+  command = plan
+  variables {
+    github_oidc_subject_prefix = "repo:23faraaz@213287679/OtherRepo@1459330795"
+  }
+  expect_failures = [var.github_oidc_subject_prefix]
 }

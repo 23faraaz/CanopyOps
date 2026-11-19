@@ -10,7 +10,7 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - A separate `docker/cloud-api/Dockerfile` builds a PostgreSQL-only API serving image. The root Dockerfile retains SQLite and migration/recovery tooling for local use; the running local stack is unchanged.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
 - A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
-- Local and GitHub Actions CI checks are described below. AWS currently contains only the Terraform state bootstrap (S3 protections and a demo IAM role/policy); application deployment and deployment/CD workflows are not implemented. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ is not provisioned.
+- GitHub OIDC image publishing, native ECR scan gating and separate Terraform plan, approved deploy and manual destroy workflows are implemented and verified below. AWS retains protected state storage, scoped CI roles and three encrypted immutable ECR repositories. The demo network was created and removed in a reviewed workflow rehearsal. No ECS/RDS application is deployed; RDS PostgreSQL replaces the earlier DynamoDB plan and Multi-AZ remains future work.
 
 ## Repository layout
 
@@ -37,8 +37,8 @@ scripts/                  # Operator commands and verification tools
 tests/                    # Application/guard regression tests
 security/                 # Explicit risk controls and review proposals
 infra/                    # Demo backend, rehearsed network module and future scaffolds
-  bootstrap/              # Applied state bucket protections and demo IAM role
-  registry/               # ECR lifecycle root; source prepared, AWS apply pending review
+  bootstrap/              # Applied state protections and scoped operator/OIDC roles
+  registry/               # Applied encrypted immutable ECR repositories and retention
 ```
 
 Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap. The parent infra configuration calls a network module whose creation and teardown were exercised in AWS using the demo role. The network is now torn down; bootstrap remains. ECR now has implementation and mock tests in a separate registry root; other service modules remain learning scaffolds.
@@ -72,11 +72,11 @@ These short shared-host Docker trials are screening evidence, not a production c
 
 Before deployment, repeat the chosen workload on ECS with the migrated database and real worker path, then measure request errors/latency, durable processing, reading freshness and queue recovery during both a healthy release and an intentionally failed release. Rolling overlap, ALB health/routing, draining, SIGTERM and tested rollback determine release availability; image size cannot establish zero downtime. Compare any smaller allocation against both image variants before attributing savings. Fargate charges for allocated CPU/memory and time starting with image download ([AWS pricing](https://aws.amazon.com/fargate/pricing/)). Actual AWS spend and ECS availability remain unmeasured.
 
-Keep Fargate as the initial deployment choice. A cheaper EC2 option is a later comparison of total host capacity, all three services, idle time, patching and operational work; no EC2 saving is claimed or EC2 infrastructure added here. Before provisioning paid services, estimate the complete London stack, including endpoints, ALB/WAF, Redis and RDS, against the $20–30 rehearsal budget. Limit paid sessions and tear down application infrastructure afterward. Secure RDS connectivity still requires private networking, verified TLS/CA trust, scoped runtime roles and runtime secrets; this fixture does not verify those controls. Application publishing to encrypted ECR via OIDC, Terraform plan/deploy and a separate manual destroy workflow remain subsequent stages, with Terraform owning deployed immutable digests.
+Keep Fargate as the initial deployment choice. A cheaper EC2 option is a later comparison of total host capacity, all three services, idle time, patching and operational work; no EC2 saving is claimed or EC2 infrastructure added here. Before provisioning paid services, estimate the complete London stack, including endpoints, ALB/WAF, Redis and RDS, against the $20–30 rehearsal budget. Limit paid sessions and tear down application infrastructure afterward. Secure RDS connectivity still requires private networking, verified TLS/CA trust, scoped runtime roles and runtime secrets; this fixture does not verify those controls. At this packaging checkpoint, ECR publishing and Terraform workflows were subsequent stages; their later verified results appear below. ECS deployment and Terraform ownership of its image digests remain future work.
 
 Existing application gaps remain visible: four woodland station IDs, no event sequence/restart strategy, and the direct `PostgresStore` duplicate path does not compare conflicting payloads for an existing ID. The separately implemented queue repository's conflict handling is not evidence that every direct-write path does so. No domain/schema behavior is changed in this packaging stage.
 
-The next automation stages remain separate, focused commits:
+Packaging-stage roadmap (retained as historical context): publishing and network-only Terraform workflows below are now verified; the ECS/RDS/HTTPS and release-recovery work remains future scope.
 
 1. Terraform format/validation, lint and security checks are implemented in the credential-free matrix described below. Authenticated deployment plans remain separate; this matrix does not add supported Python versions.
 2. Add encrypted, immutable ECR repositories and scoped GitHub OIDC roles. Review the Terraform plan and costs before applying. No static AWS keys or cloud SQLite waiver.
@@ -1197,7 +1197,7 @@ Local verification on 19 November 2026 built and scanned all three PostgreSQL-on
 
 The isolated Python suite passed 118 tests, including artifact tampering, stale scans, non-root enforcement and simulated publishing without a rebuild. All three Terraform roots passed formatting, validation, TFLint and security checks; mocked plans verified repository settings, trust and permission boundaries. Mocked authorization checks are not live AWS authorization tests.
 
-At the initial source-only milestone, ECR repositories and the publisher role had not been applied. Subsequent activation evidence is recorded below; OIDC assumption, immutable-tag rejection and actual push results must be distinguished from source and mock checks. Inventory must check for an existing GitHub OIDC provider and registry-level scanning settings before applying. The separate registry state avoids recreating the previously torn-down application network. Terraform deploy and manual destroy workflows remain subsequent stages, not implemented deployment claims.
+At the initial source-only milestone, ECR repositories and the publisher role had not been applied. Subsequent activation evidence is recorded below; OIDC assumption, immutable-tag rejection and actual push results must be distinguished from source and mock checks. Inventory must check for an existing GitHub OIDC provider and registry-level scanning settings before applying. The separate registry state avoids recreating the previously torn-down application network. At that source-only checkpoint, Terraform deploy and manual destroy were subsequent stages; their later network-only verification is recorded below.
 
 
 ## TFLint plugin-download rate limit
@@ -1221,7 +1221,7 @@ Known public publishing parameters were configured and the repository flag enabl
 
 The London public price list still quotes standard ECR storage at $0.10/GB-month (effective 1 November 2026). The conservative 12 GB assumption is $1.20/month, approximately $0.28 for seven days, excluding transfer, tax, state storage and CI allowances. This is an estimate, not measured billing or a hard cap; lifecycle expiration is asynchronous. AES256 avoids adding a customer-managed KMS key; registry enhanced scanning was not enabled. Before ECS depends on these images, revise/preview retention to protect active and rollback digests.
 
-Safe, credential-free activation summaries are retained locally in ignored `backups/ecr-activation-summary.json`. Actual plans remain private and are not committed. Terraform plan/deploy/manual-destroy workflows and ECS deployment are subsequent stages. Preserve current local monitoring; provision central logs, bounded retention, service metrics and queue/reading-freshness alerts alongside ECS. Distributed tracing is a later improvement, not an implemented claim.
+Safe, credential-free activation summaries are retained locally in ignored `backups/ecr-activation-summary.json`. Actual plans remain private and are not committed. Terraform plan/deploy/manual-destroy verification is recorded below; ECS deployment remains future work. Preserve current local monitoring; provision central logs, bounded retention, service metrics and queue/reading-freshness alerts alongside ECS. Distributed tracing is a later improvement, not an implemented claim.
 
 
 ### OIDC subject mismatch discovered during the first real publish
@@ -1378,7 +1378,8 @@ The workflow roles and prefix-only lifecycle were applied on 19 November 2026:
 13 additions, zero changes/deletions; the follow-up bootstrap plan showed no changes.
 The workflow activation flag was enabled after PR #24 merged and its checks passed.
 Live Terraform OIDC authentication and private saved-plan upload were subsequently
-verified. Infrastructure apply and teardown remain untested pending human review.
+verified. Saved-plan infrastructure apply and teardown were subsequently approved separately
+and verified against AWS resource metadata and retained state-object headers.
 No ECS application deployment is claimed. Plan storage adds S3 request/storage
 usage; IAM roles add no compute resources. Review the bootstrap plan and current
 S3 prices before activation. Lifecycle expiry bounds retention, not aggregate cost.
@@ -1430,11 +1431,50 @@ Live Terraform setup verification (19 November 2026):
   binary is 9,288 bytes. An independent S3 HEAD verified its exact object version,
   AES256 encryption, size and checksum metadata without reading the binary or state.
 - [Deploy review 44580053724](https://github.com/23faraaz/CanopyOps/actions/runs/44580053724)
-  passed its unprivileged source/metadata review and waits for `terraform-deploy`
-  approval. This is not yet evidence of successful apply or teardown.
+  passed its unprivileged source/metadata review, received the owner approval and
+  completed the exact saved-plan apply. Independent AWS reads verified the VPC, six
+  subnets across two AZs, disabled public-IP auto-assignment and three route tables:
+  public has the internet route; app/data have local routes only. The retained receipt
+  matches the reviewed plan checksum/version. Bootstrap/registry state headers and
+  all three encrypted immutable ECR repositories remained available afterward.
+  Full network teardown subsequently passed the separately approved destroy run below.
 
 The proposed network-only apply allocates no billable public IPv4 address or running
 application service. An internet gateway itself has no charge; usage and other
 services can incur charges ([AWS internet gateway pricing](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html)).
 Private saved-plan/state storage and requests remain subject to S3 pricing. This is
 not an estimate for the later ECS/RDS/ALB/WAF/endpoints design and not a cost cap.
+
+
+Repeatable GitHub workflow entry points (run from the repository checkout):
+
+```bash
+gh workflow run terraform-plan.yml --ref main
+# Inspect the successful run summary; use its current-main run ID below.
+gh workflow run terraform-deploy.yml --ref main -f plan_run_id=PLAN_RUN_ID
+# Inspect review, then explicitly approve terraform-deploy in GitHub.
+gh workflow run terraform-destroy.yml --ref main -f confirm_environment=canopyops-demo
+# Inspect its fresh destroy plan, then separately approve terraform-destroy.
+```
+
+A new main commit, expired plan or changed state requires a fresh plan and review.
+Do not merge documentation changes between planning and consuming that plan.
+
+
+The separately approved [manual destroy run 44580919291](https://github.com/23faraaz/CanopyOps/actions/runs/44580919291)
+succeeded. Its fresh plan contained exactly 18 network deletions and no creates or
+updates; the retained receipt matches that plan checksum and S3 version. Independent
+AWS reads then verified zero project VPCs, preservation of the existing default VPC,
+unchanged bootstrap and registry state-object versions/headers, all three encrypted
+immutable ECR repositories retained, encrypted demo state retained and no live demo
+lock object. A 404 for that exact `.tflock` after completion confirms release; it is
+not a missing-state result.
+
+Safe summaries, receipts and filtered metadata are retained locally in ignored
+`backups/terraform-workflow-setup-3c0b1510bf644d2d9e01104459dcccc8/`. Actual state,
+private input files and binary plans are not included in GitHub artifacts or this
+repository. Application data and the live local stack were not changed by these
+workflow rehearsals. This verifies network lifecycle automation, not ECS deployment,
+application release rollback, RDS failover, full database rollback activation or zero
+downtime. Re-running the unchanged demo configuration will propose recreating the
+network; teardown intentionally does not erase its Terraform source.

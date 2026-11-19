@@ -1374,9 +1374,39 @@ python3 scripts/terraform_checks.py --root infra/bootstrap --only lint
 python3 scripts/terraform_checks.py --root infra/bootstrap --only security
 ```
 
-At preparation time these workflow roles, protected environments and activation
-flag have not been applied/configured. Mock tests and static checks do not prove
-live OIDC authentication, saved-plan transfer, infrastructure deployment or teardown.
+The workflow roles and prefix-only lifecycle were applied on 19 November 2026:
+13 additions, zero changes/deletions; the follow-up bootstrap plan showed no changes.
+The workflow activation flag remains disabled pending merged source checks.
+Mock tests and static checks do not prove live Terraform OIDC authentication,
+saved-plan transfer, infrastructure deployment or teardown.
 No ECS application deployment is claimed. Plan storage adds S3 request/storage
 usage; IAM roles add no compute resources. Review the bootstrap plan and current
 S3 prices before activation. Lifecycle expiry bounds retention, not aggregate cost.
+
+
+Workflow preparation evidence (19 November 2026): 181 Python tests passed, including
+negative controls for expired/mismatched plans, forbidden actions, unexpected
+accounts and private-output redaction. Syntax, Ruff, actionlint, formatting,
+backend-disabled Terraform validation, mocked IAM tests, TFLint and security checks
+passed. The existing LOW S3 access-logging advisory remains; no new blocking scan
+findings were reported. Access Analyzer returned no findings for the nine identity
+policies. Each OIDC trust policy returned `CONFIRM_AUDIENCE_CLAIM_TYPE` (suggestion)
+and `SPECIFIC_GITHUB_REPO_AND_BRANCH_RECOMMENDED` (warning). Reviewed conditions use
+`sts.amazonaws.com` and the exact immutable repository plus environment subject;
+main-only GitHub environment branch policies provide the branch restriction.
+These advisories are recorded, not described as a clean trust-policy scan.
+
+The corrected native ECR gate was verified through protected main run
+[44571146146](https://github.com/23faraaz/CanopyOps/actions/runs/44571146146), commit
+`88499528c845c8150820c36a77bd4eeb3e5de1e1`. All three publication receipts record
+native status `COMPLETE` and empty finding counts; the complete immutable release
+catalogue succeeded. API digest:
+`sha256:cf0a48a2047d5c3f8b19022d37afe3d608a7fcbcf3191877446f39781d4270f4`;
+worker: `sha256:c71eadb4c348c62f0e157ecc5984cda115e06c7acd7e6d2dd2741b96a1bac5ef`;
+analytics: `sha256:b6e37e7835d01d604ef7d13ae3f6788140091cdf66bff0e83c4889806a59877f`.
+This verifies publishing and scan gating, not ECS deployment or a perpetual
+vulnerability-free status.
+
+References: [S3 backend permissions and locking](https://developer.hashicorp.com/terraform/language/backend/s3),
+[saved-plan sensitivity](https://developer.hashicorp.com/terraform/cli/commands/plan),
+[GitHub AWS environment trust](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).

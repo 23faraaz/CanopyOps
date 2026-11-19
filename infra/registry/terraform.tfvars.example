@@ -1,0 +1,4 @@
+project_name    = "canopyops"
+environment     = "demo"
+aws_region      = "eu-west-2"
+retained_images = 20

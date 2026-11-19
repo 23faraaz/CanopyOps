@@ -55,6 +55,7 @@ def test_source_copy_separates_roots_and_never_opens_filtered_paths(tmp_path, mo
         [
             "infra/main.tf",
             "infra/bootstrap/main.tf",
+            "infra/registry/main.tf",
             "infra/.tflint.hcl",
             "infra/terraform.tfvars",
             "infra/terraform.tfstate",
@@ -70,6 +71,33 @@ def test_source_copy_separates_roots_and_never_opens_filtered_paths(tmp_path, mo
     checks = terraform_checks.Checks("infra", directory)
     assert (checks.source / "infra/main.tf").is_file()
     assert not (checks.source / "infra/bootstrap").exists()
+    assert not (checks.source / "infra/registry").exists()
+
+
+def test_registry_copy_includes_its_shared_module_but_not_other_roots(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    for name in ["infra/registry/main.tf", "infra/modules/ecr/main.tf", "infra/.tflint.hcl"]:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# public fixture")
+    manifest = "\n".join(
+        [
+            "infra/registry/main.tf",
+            "infra/modules/ecr/main.tf",
+            "infra/bootstrap/main.tf",
+            "infra/modules/network/main.tf",
+        ]
+    )
+    monkeypatch.setattr(terraform_checks, "ROOT", root)
+    monkeypatch.setattr(
+        terraform_checks.Checks, "command", lambda *a, **kw: SimpleNamespace(stdout=manifest)
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    checks = terraform_checks.Checks("infra/registry", work)
+    assert (checks.source / "infra/modules/ecr/main.tf").is_file()
+    assert not (checks.source / "infra/bootstrap").exists()
+    assert not (checks.source / "infra/modules/network").exists()
 
 
 def test_source_symlink_is_rejected_before_copy(tmp_path, monkeypatch):

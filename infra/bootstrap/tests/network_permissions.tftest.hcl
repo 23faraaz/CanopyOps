@@ -126,7 +126,7 @@ run "network_permission_boundaries" {
   }
 
   assert {
-    condition     = length(aws_iam_role_policy.demo_network.policy) + length(aws_iam_role_policy.demo_state.policy) <= 10240
+    condition     = length(aws_iam_role_policy.demo_network.policy) + length(aws_iam_role_policy.demo_state.policy) + length(aws_iam_role_policy.registry_state.policy) <= 10240
     error_message = "Combined role inline policies exceed the IAM 10,240-character quota."
   }
 }

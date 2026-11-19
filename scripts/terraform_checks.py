@@ -21,7 +21,7 @@ TFLINT = "ghcr.io/terraform-linters/tflint:v0.66.0@sha256:65b9944a9274c4989492c1
 TRIVY = (
     "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 )
-ROOTS = ("infra", "infra/bootstrap")
+ROOTS = ("infra", "infra/bootstrap", "infra/registry")
 
 
 def allowed_source(name):
@@ -78,9 +78,13 @@ class Checks:
         for name in names:
             if not allowed_source(name):
                 continue
-            if root == "infra" and name.startswith("infra/bootstrap/"):
+            if root == "infra" and any(name.startswith(child + "/") for child in ROOTS[1:]):
                 continue
             if root == "infra/bootstrap" and not name.startswith("infra/bootstrap/"):
+                continue
+            if root == "infra/registry" and not name.startswith(
+                ("infra/registry/", "infra/modules/ecr/")
+            ):
                 continue
             source = ROOT / name
             if source.is_symlink():
@@ -158,11 +162,9 @@ class Checks:
         )
         self.run("validate", TERRAFORM, ["validate", "-no-color"])
         if self.root == "infra/bootstrap":
-            self.run(
-                "mock-policy-tests",
-                TERRAFORM,
-                ["test", "-filter=tests/network_permissions.tftest.hcl", "-no-color"],
-            )
+            self.run("mock-policy-tests", TERRAFORM, ["test", "-no-color"])
+        elif self.root == "infra/registry":
+            self.run("mock-registry-tests", TERRAFORM, ["test", "-no-color"])
 
     def lint(self):
         self.run("lint-init", TFLINT, ["--init", "--config=/work/tflint.hcl"], network="bridge")

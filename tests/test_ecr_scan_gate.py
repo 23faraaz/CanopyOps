@@ -82,16 +82,18 @@ def test_stale_or_future_native_scan_is_rejected(age):
         ecr_scan_gate.evaluate(value, ACCOUNT, REPOSITORY, DIGEST, now=NOW)
 
 
-def test_waiter_failure_retains_report_and_fails_closed(tmp_path):
+def test_authorization_error_retains_safe_code_without_retrying(tmp_path):
+    calls = []
+
     def aws(*args):
-        if args[1] == "wait":
-            raise RuntimeError("synthetic waiter timeout")
-        return json.dumps(report())
+        calls.append(args)
+        raise ecr_scan_gate.AwsApiError("AccessDeniedException")
 
     path = tmp_path / "native.json"
-    with pytest.raises(RuntimeError, match="waiter failed"):
-        ecr_scan_gate.check(aws, ACCOUNT, REPOSITORY, DIGEST, path)
-    assert json.loads(path.read_text())["imageId"]["imageDigest"] == DIGEST
+    with pytest.raises(RuntimeError, match="AccessDeniedException"):
+        ecr_scan_gate.check(aws, ACCOUNT, REPOSITORY, DIGEST, path, sleep=lambda _: None)
+    assert len(calls) == 1
+    assert json.loads(path.read_text())["error_code"] == "AccessDeniedException"
 
 
 def test_gate_uses_the_digest_and_retains_rejected_findings(tmp_path):
@@ -110,6 +112,43 @@ def test_gate_uses_the_digest_and_retains_rejected_findings(tmp_path):
     with pytest.raises(ValueError, match="HIGH/CRITICAL"):
         ecr_scan_gate.check(aws, ACCOUNT, REPOSITORY, DIGEST, path)
     assert (
-        len(calls) == 2
+        len(calls) == 1
         and json.loads(path.read_text())["imageScanFindings"]["findingSeverityCounts"]["HIGH"] == 4
     )
+
+
+def test_scan_startup_visibility_race_is_retried_then_passes(tmp_path):
+    pending = report()
+    pending["imageScanStatus"]["status"] = "IN_PROGRESS"
+    complete = report()
+    complete["imageScanFindings"]["imageScanCompletedAt"] = datetime.now(timezone.utc).isoformat()
+    responses = [ecr_scan_gate.AwsApiError("ScanNotFoundException"), pending, complete]
+    delays = []
+
+    def aws(*args):
+        value = responses.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return json.dumps(value)
+
+    result = ecr_scan_gate.check(
+        aws, ACCOUNT, REPOSITORY, DIGEST, tmp_path / "native.json", attempts=3, sleep=delays.append
+    )
+    assert result["status"] == "COMPLETE" and delays == [5, 5] and not responses
+
+
+def test_in_progress_timeout_retains_the_last_report(tmp_path):
+    value = report()
+    value["imageScanStatus"]["status"] = "IN_PROGRESS"
+    path = tmp_path / "native.json"
+    with pytest.raises(RuntimeError, match="bounded polling"):
+        ecr_scan_gate.check(
+            lambda *a: json.dumps(value),
+            ACCOUNT,
+            REPOSITORY,
+            DIGEST,
+            path,
+            attempts=2,
+            sleep=lambda _: None,
+        )
+    assert json.loads(path.read_text())["imageScanStatus"]["status"] == "IN_PROGRESS"

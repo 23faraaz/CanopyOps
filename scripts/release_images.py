@@ -16,7 +16,7 @@ import subprocess
 import tarfile
 import tempfile
 
-from ecr_scan_gate import check as native_scan_gate
+from ecr_scan_gate import AwsApiError, check as native_scan_gate
 from terraform_checks import TRIVY
 from checks import HADOLINT, ACTIONLINT
 
@@ -140,6 +140,9 @@ class Docker:
             # Do not echo AWS/login output, environment values or credential-bearing commands.
             if not self.sensitive:
                 print(result.stdout + result.stderr, flush=True)
+            if self.sensitive and Path(str(args[0])).name == "aws":
+                match = re.search(r"An error occurred \(([A-Za-z][A-Za-z0-9]+)\)", result.stderr)
+                raise AwsApiError(match.group(1) if match else "UnknownAwsError")
             raise RuntimeError("Release command failed: " + Path(str(args[0])).name)
         return result.stdout
 

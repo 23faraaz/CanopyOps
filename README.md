@@ -1284,3 +1284,25 @@ The root local/SQLite Dockerfile, application code, locks, user, startup command
 
 
 Patched local candidates for all three components built successfully and passed the strict Trivy artifact gate. The API also passed its disposable PostgreSQL smoke test. Offline installed-package metadata confirmed `libcrypto3` and `libssl3` both at3.5.9-r1 in every candidate. The first parallel local scan attempt exhausted the3.8GiB `/tmp` tmpfs while downloading separate vulnerability databases; API/worker had built successfully but their scans had not passed. Their saved archives were rescanned sequentially through one temporary cache, without rebuilding. An APK information probe also attempted an index lookup with networking disabled; direct installed-package metadata was used instead. No backups, recovery evidence, volumes or gates were removed. These candidate checks precede fresh CI publication and native ECR verification of the patched digests.
+
+
+## Automated native ECR release gate
+
+Publishing now verifies native ECR BASIC scan results after upload and remote-digest validation, before writing a component release receipt. The AWS CLI waiter polls the exact digest every5s and stops after60 unsuccessful checks; API errors, timeout, failed/unsupported/incomplete scans, wrong account/repository/digest, malformed reports and HIGH/CRITICAL counts or entries fail the job. A completed scan must have an aware timestamp within24h (allowing5min clock skew); this permits ECR's cached scan of an identical digest without treating an arbitrarily old report as current. Existing Trivy and artifact-freshness checks remain enabled.
+
+```mermaid
+flowchart LR
+  Unit[Unit checks] --> Build[Build each component once]
+  Lint[Lint] --> Build
+  Build --> Trivy[Scan saved artifact]
+  Trivy --> Review[Protected environment review]
+  Review --> Push[Push the saved artifact]
+  Push --> Digest[Verify remote digest]
+  Digest --> Native[Native ECR scan gate]
+  Native --> Receipt[Passing component receipt]
+  Receipt --> Catalogue[Catalogue only when all three pass]
+```
+
+The publisher gains only `ecr:DescribeImageScanFindings` on the existing three repositories. Its workflow session policy restricts that read to one component repository. It still cannot deploy infrastructure, read Terraform state, change repositories or delete images. Raw native reports are uploaded as separate seven-day artifacts on success or failure. If a scan fails, an uploaded image may remain in ECR, but no passing component receipt or complete release catalogue is issued; future deployment automation must use the accepted catalogue rather than any tag found in the registry. This gate is post-push, not a claim that rejected images were never stored.
+
+Validation:141 isolated Python tests passed, including HIGH/CRITICAL denial, failed/incomplete scans, identity mismatch, malformed counts, stale timestamps, waiter failure, retained failure reports and publisher receipt withholding. Workflow/Dockerfile lint and isolated bootstrap Terraform formatting, validation/mock policies, TFLint and security controls passed. Read-only live gate checks passed for all three patched release digests and rejected the earlier API digest with four HIGH findings. Safe reports are ignored under `backups/native-ecr-gate-9f686870636b4bcab61efdb32d949d4e`. These live checks used the authorized temporary operator profile; scoped publisher activation and the protected workflow must also be verified before claiming that full path passed.

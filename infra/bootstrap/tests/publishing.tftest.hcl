@@ -53,7 +53,7 @@ run "publisher_boundaries" {
       jsondecode(aws_iam_role_policy.github_publisher[0].policy).Statement[0].Resource == "*" &&
       toset(jsondecode(aws_iam_role_policy.github_publisher[0].policy).Statement[1].Action) == toset([
         "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
-        "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:DescribeRepositories"
+        "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:DescribeRepositories", "ecr:DescribeImageScanFindings"
       ])
     )
     error_message = "Publisher must have no state, deployment, IAM, delete or repository-configuration permissions."

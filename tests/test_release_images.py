@@ -124,8 +124,10 @@ def test_latest_successful_ci_allows_the_exact_commit(monkeypatch):
     wait_for_ci.wait("23faraaz/CanopyOps", COMMIT)
 
 
-@pytest.mark.parametrize("mismatch", [False, True])
-def test_publisher_loads_the_scanned_archive_without_rebuilding(tmp_path, monkeypatch, mismatch):
+@pytest.mark.parametrize("mismatch,native_high", [(False, False), (True, False), (False, True)])
+def test_publisher_loads_the_scanned_archive_without_rebuilding(
+    tmp_path, monkeypatch, mismatch, native_high
+):
     from types import SimpleNamespace
 
     artifact(tmp_path)
@@ -162,6 +164,22 @@ def test_publisher_loads_the_scanned_archive_without_rebuilding(tmp_path, monkey
                 )
             if action == "get-login-password":
                 return "synthetic-login-fixture"
+            if action == "wait":
+                return ""
+            if action == "describe-image-scan-findings":
+                return json.dumps(
+                    {
+                        "registryId": "123456789012",
+                        "repositoryName": "canopyops-demo/api",
+                        "imageId": {"imageDigest": self.remote_digest},
+                        "imageScanStatus": {"status": "COMPLETE"},
+                        "imageScanFindings": {
+                            "findingSeverityCounts": {"HIGH": 1} if native_high else {},
+                            "findings": [],
+                            "imageScanCompletedAt": datetime.now(timezone.utc).isoformat(),
+                        },
+                    }
+                )
             assert action == "batch-get-image"
             manifest = json.dumps(
                 {
@@ -171,6 +189,7 @@ def test_publisher_loads_the_scanned_archive_without_rebuilding(tmp_path, monkey
                     },
                 }
             )
+            self.remote_digest = "sha256:" + hashlib.sha256(manifest.encode()).hexdigest()
             return json.dumps(
                 {
                     "images": [
@@ -205,6 +224,11 @@ def test_publisher_loads_the_scanned_archive_without_rebuilding(tmp_path, monkey
         with pytest.raises(ValueError, match="Published manifest"):
             release_images.publish(args)
         assert not (tmp_path / "receipt.json").exists()
+    elif native_high:
+        with pytest.raises(ValueError, match="Native ECR HIGH/CRITICAL"):
+            release_images.publish(args)
+        assert not (tmp_path / "receipt.json").exists()
+        assert (tmp_path / "receipt.native-scan.json").is_file()
     else:
         release_images.publish(args)
         receipt = json.loads((tmp_path / "receipt.json").read_text())

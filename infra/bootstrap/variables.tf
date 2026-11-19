@@ -60,3 +60,10 @@ variable "github_oidc_subject_prefix" {
     error_message = "Use the exact immutable owner/repository prefix for github_repository; wildcards and environment suffixes are forbidden."
   }
 }
+
+
+variable "enable_terraform_workflows" {
+  description = "Enable separately scoped GitHub plan, deploy and destroy identities after reviewing environment protections"
+  type        = bool
+  default     = false
+}

@@ -8,7 +8,7 @@ locals {
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count          = var.enable_github_publishing && var.existing_github_oidc_provider_arn == null ? 1 : 0
+  count          = (var.enable_github_publishing || var.enable_terraform_workflows) && var.existing_github_oidc_provider_arn == null ? 1 : 0
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
   tags           = { Name = "${local.registry_prefix}-github-oidc" }

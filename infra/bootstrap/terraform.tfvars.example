@@ -9,3 +9,6 @@ enable_github_publishing = false
 
 # Public metadata: verify against the repository OIDC customization endpoint before applying.
 github_oidc_subject_prefix = "repo:23faraaz@213287679/CanopyOps@1459330795"
+
+# Remains opt-in until the private-plan storage and workflow roles are reviewed.
+enable_terraform_workflows = false

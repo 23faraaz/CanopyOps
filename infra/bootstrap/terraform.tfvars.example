@@ -6,3 +6,6 @@ state_bucket_name = "canopyops-demo-tfstate-23faraaz"
 terraform_operator_arn = "arn:aws:iam::123456789012:user/example-user"
 # Keep disabled until the existing OIDC-provider inventory and GitHub environment are reviewed.
 enable_github_publishing = false
+
+# Public metadata: verify against the repository OIDC customization endpoint before applying.
+github_oidc_subject_prefix = "repo:23faraaz@213287679/CanopyOps@1459330795"

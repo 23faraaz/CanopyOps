@@ -116,6 +116,8 @@ Final checks passed Python 3.12.16 syntax, Ruff lint/format, dependency consiste
 
 The comparison report's ambiguous size-field name was corrected to describe Docker's reported `.Size` without changing any measurements. Its original is retained alongside the corrected report. No existing database, migration evidence or risk acceptance was changed.
 
+The fixture now waits for PostgreSQL over loopback TCP: the image's temporary initialization server accepts Unix sockets before initialization finishes, so socket-only readiness could race role/schema creation. Exact-artifact smoke run `0b2b649a0f9b407493a8d8efdd3a09dc` passed after this test-only hardening. The initial [PR CI run](https://github.com/23faraaz/CanopyOps/actions/runs/44424868596) passed Python, configuration, container and strict scan checks; current-head checks and review are available in [PR #15](https://github.com/23faraaz/CanopyOps/pull/15).
+
 ## Python development
 
 For Python-only development from the checkout root, use the existing virtual environment and the source path explicitly:

@@ -427,12 +427,16 @@ class Verification:
             image,
         )
         deadline = time.monotonic() + 60
+        # The image's temporary initialization server accepts Unix sockets only.
+        # Wait for TCP so role/schema setup cannot race entrypoint initialization.
         while time.monotonic() < deadline:
             if (
                 self.dc(
                     "exec",
                     self.database,
                     "pg_isready",
+                    "-h",
+                    "127.0.0.1",
                     "-U",
                     "postgres",
                     "-d",

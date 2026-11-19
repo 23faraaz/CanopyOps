@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime, timezone
 import subprocess
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -49,6 +50,32 @@ def python_checks():
     )
 
 
+def lint_workflows(docker_run):
+    """Give actionlint the complete public workflow project, including local calls."""
+    with tempfile.TemporaryDirectory(prefix="canopy-workflow-lint-") as temporary:
+        project = Path(temporary)
+        (project / ".git").mkdir()
+        target = project / ".github/workflows"
+        target.mkdir(parents=True)
+        for source in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            if source.is_symlink():
+                raise ValueError("Refusing a workflow symlink")
+            shutil.copyfile(source, target / source.name)
+        docker_run(
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--mount",
+            f"type=bind,source={project},target=/work,readonly",
+            "-w",
+            "/work",
+            ACTIONLINT,
+        )
+
+
 def configuration_checks():
     run(
         "docker",
@@ -79,17 +106,7 @@ def configuration_checks():
         "hadolint",
         "/Dockerfile",
     )
-    for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
-        run(
-            "docker",
-            "run",
-            "--rm",
-            "--mount",
-            f"type=bind,source={workflow},target=/workflow.yml,readonly",
-            ACTIONLINT,
-            "-color",
-            "/workflow.yml",
-        )
+    lint_workflows(lambda *args: run("docker", *args))
     run("docker", "compose", "-f", str(ROOT / "compose.yaml"), "config", "--quiet")
     run(
         "docker",

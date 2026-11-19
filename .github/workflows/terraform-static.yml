@@ -1,0 +1,35 @@
+name: Terraform source checks
+on:
+  workflow_call:
+    inputs:
+      roots:
+        type: string
+        default: '["infra", "infra/bootstrap", "infra/registry"]'
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: Terraform ${{ matrix.check }} (${{ matrix.root }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(inputs.roots) }}
+        check: [format, validate, lint, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Static Terraform checks without AWS credentials
+        if: matrix.check != 'lint'
+        env:
+          CHECK_ROOT: ${{ matrix.root }}
+          CHECK_KIND: ${{ matrix.check }}
+        run: python3 scripts/terraform_checks.py --root "$CHECK_ROOT" --only "$CHECK_KIND"
+      - name: Authenticated plugin download; offline lint
+        if: matrix.check == 'lint'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CHECK_ROOT: ${{ matrix.root }}
+        run: python3 scripts/terraform_checks.py --root "$CHECK_ROOT" --only lint --github-token-from-env

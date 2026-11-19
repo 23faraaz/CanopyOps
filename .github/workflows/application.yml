@@ -1,8 +1,10 @@
 name: Application publishing
 on:
   pull_request:
+    paths: ['app/**', 'docker/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'tests/**', 'scripts/release_images.py', 'scripts/ecr_scan_gate.py', 'scripts/wait_for_ci.py', 'scripts/verify_cloud_runtime.py', 'scripts/checks.py', 'scripts/terraform_checks.py', 'scripts/recovery/**', '.github/workflows/application.yml']
   push:
     branches: [main]
+    paths: ['app/**', 'docker/**', 'Dockerfile', '.dockerignore', 'pyproject.toml', 'tests/**', 'scripts/release_images.py', 'scripts/ecr_scan_gate.py', 'scripts/wait_for_ci.py', 'scripts/verify_cloud_runtime.py', 'scripts/checks.py', 'scripts/terraform_checks.py', 'scripts/recovery/**', '.github/workflows/application.yml']
   workflow_dispatch:
 permissions:
   contents: read

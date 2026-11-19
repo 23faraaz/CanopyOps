@@ -36,26 +36,7 @@ jobs:
           print("Scan workspace cleanup verified")
           PY
   terraform:
-    name: Terraform ${{ matrix.check }} (${{ matrix.root }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        root: [infra, infra/bootstrap, infra/registry]
-        check: [format, validate, lint, security]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Terraform plugin download and offline lint
-        if: matrix.check == 'lint'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/terraform_checks.py --root '${{ matrix.root }}' --only lint --github-token-from-env
-      - name: Credential-free Terraform check
-        if: matrix.check != 'lint'
-        run: python3 scripts/terraform_checks.py --root '${{ matrix.root }}' --only '${{ matrix.check }}'
+    uses: ./.github/workflows/terraform-static.yml
   checks:
     name: checks
     if: ${{ always() }}

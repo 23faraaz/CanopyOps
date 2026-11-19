@@ -1315,3 +1315,68 @@ The first protected automated-gate run44558595070 uploaded images but failed bef
 The gate now polls `DescribeImageScanFindings` directly, at most60 checks five seconds apart. Only `ScanNotFoundException`, `ImageNotFoundException` and PENDING/IN_PROGRESS states are retried; authorization/API errors and failed/unsupported scan states fail closed. Complete reports still undergo the same identity, freshness and HIGH/CRITICAL checks. The publisher exposes only a validated AWS error-code identifier, never raw AWS/login error output. Safe failure reports are retained; no release receipt is issued on failure. Regression tests exercise delayed visibility, bounded timeout, immediate permission denial and error redaction.
 
 Polling/diagnostic repair validation:144 Python tests, Python syntax/Ruff checks and workflow/Dockerfile lint passed. HIGH/CRITICAL rejection and receipt withholding remain covered. The initial failed run is retained; full protected-run success for this repair is still pending.
+### Terraform workflow preparation (network-only demo)
+
+The proposed automation separates three GitHub OIDC roles and environments:
+`terraform-plan`, `terraform-deploy` and `terraform-destroy`. Plan can describe
+network resources, read the demo state, manage its exact lock object and upload
+private saved plans. Deploy receives the existing scoped network permissions;
+destroy receives only the corresponding read and deletion permissions. Neither
+can manage bootstrap or registry state. State-object deletion is not granted;
+lock-object deletion is required to release the native S3 lock.
+
+Static formatting, validation, TFLint and security checks run independently in a
+reusable matrix. Pull requests receive credential-free checks only. Authenticated
+operations require current main, successful CI, the exact repository/environment
+OIDC subject, and an explicit activation flag. Deploy and destroy also require a
+protected GitHub environment review. Never approve those environments automatically.
+
+Binary Terraform plans can contain sensitive state. They are stored under
+`canopyops/demo/plans/` in the existing private, versioned, SSE-S3 bucket, not in
+GitHub artifacts. Artifacts contain only bounded network review metadata. Consumers
+verify the exact S3 object version, SHA-256, source commit, run/attempt, backend,
+provider lock and public-input hashes. Plans expire for execution after two hours;
+a changed main commit or stale state requires a new plan and review. S3 lifecycle
+rules apply only to the plan prefix: current and noncurrent expiration are each
+one day, with asynchronous processing and UTC rounding. This is not a hard two-day
+erasure guarantee. State and lock keys are outside the expiry prefix.
+
+The controller deliberately supports only the six existing network resource types.
+Apply rejects deletes, replacements, imports and moves; destroy accepts deletion
+only. Extending this to ECS, RDS or other services requires a new scope, IAM and cost
+review. The committed `infra/terraform.tfvars.example` is the explicit non-secret
+configuration used by CI; actual local `.tfvars` files are never uploaded. The demo
+backend retains its existing default state key and native S3 locking, with an
+explicit workspace-listing prefix. Bootstrap and registry roots remain separate.
+
+Operation sequence after setup verification:
+
+1. Run Terraform plan on main; inspect its sanitized job summary and metadata.
+2. Dispatch Terraform deploy with that successful plan run ID, inspect the review
+   job, then approve `terraform-deploy`. It applies that saved binary, without replanning.
+3. For teardown, dispatch Terraform destroy with confirmation `canopyops-demo`.
+   Inspect its newly generated destroy review before approving `terraform-destroy`.
+4. Verify state/resource results and retain the receipt. Bootstrap and ECR are not
+   part of either operation.
+
+All three operations share `terraform-demo-state` concurrency; S3 locking also
+protects against external Terraform writers. GitHub concurrency is not a FIFO
+queue and can replace a pending run. Never work around a lock with `-lock=false`.
+The role sessions request 900 seconds; an expired session or plan must fail safely.
+
+Local source verification:
+
+```bash
+python3 scripts/checks.py --only python
+python3 scripts/terraform_checks.py --root infra --only validate
+python3 scripts/terraform_checks.py --root infra/bootstrap --only validate
+python3 scripts/terraform_checks.py --root infra/bootstrap --only lint
+python3 scripts/terraform_checks.py --root infra/bootstrap --only security
+```
+
+At preparation time these workflow roles, protected environments and activation
+flag have not been applied/configured. Mock tests and static checks do not prove
+live OIDC authentication, saved-plan transfer, infrastructure deployment or teardown.
+No ECS application deployment is claimed. Plan storage adds S3 request/storage
+usage; IAM roles add no compute resources. Review the bootstrap plan and current
+S3 prices before activation. Lifecycle expiry bounds retention, not aggregate cost.

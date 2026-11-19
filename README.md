@@ -1284,3 +1284,18 @@ The root local/SQLite Dockerfile, application code, locks, user, startup command
 
 
 Patched local candidates for all three components built successfully and passed the strict Trivy artifact gate. The API also passed its disposable PostgreSQL smoke test. Offline installed-package metadata confirmed `libcrypto3` and `libssl3` both at3.5.9-r1 in every candidate. The first parallel local scan attempt exhausted the3.8GiB `/tmp` tmpfs while downloading separate vulnerability databases; API/worker had built successfully but their scans had not passed. Their saved archives were rescanned sequentially through one temporary cache, without rebuilding. An APK information probe also attempted an index lookup with networking disabled; direct installed-package metadata was used instead. No backups, recovery evidence, volumes or gates were removed. These candidate checks precede fresh CI publication and native ECR verification of the patched digests.
+
+
+### Patched release: publication and native scans verified
+
+After the owner's environment approval, [run44546464707](https://github.com/23faraaz/CanopyOps/actions/runs/44546464707) completed successfully for commit `975d4885981a07bbc16bd87ba31226080c6ecceb`. OIDC authentication, all three exact-artifact publications and the complete release catalogue passed. Independent ECR reads matched the receipt, raw-manifest hash and scanned configuration digest for every component.
+
+| Component | Patched ECR manifest digest | Native ECR scan at verification |
+| --- | --- | --- |
+| analytics | `sha256:93c29cd47bfbd6d91ef7825bc863d02cc3b53fd476ce0c84110a65709cf6f031` | COMPLETE; no reported findings |
+| api | `sha256:6ecfc1060bb3096f312cc9970ca2ffcfc11780def5c3019bde8e2e93d97769fa` | COMPLETE; no reported findings |
+| worker | `sha256:02988781427dbb29cda7006d2921ee1da1b40605466d8401b52b959e9fa634ff` | COMPLETE; no reported findings |
+
+Changed-manifest overwrite probes against all three patched release tags returned `ImageTagAlreadyExistsException`; the original digests remained unchanged. No exception or severity reduction was used to clear the earlier OpenSSL findings. The old digests still document the earlier vulnerable build; use the patched immutable references above for subsequent deployment work. A clean report is specific to these digests and the scan time, not a permanent vulnerability-free guarantee.
+
+Safe evidence remains ignored in `backups/ecr-patched-release-manifest.json` and `backups/ecr-patched-publishing-verified.json`; earlier findings and failed attempts are retained separately. Native ECR validation was operator-run and is not yet a post-push CI gate. The ECR/OIDC publishing milestone is complete; Terraform deployment/destroy workflows, ECS, AWS application migration, resilience tests and AWS observability have not been implemented by this milestone.

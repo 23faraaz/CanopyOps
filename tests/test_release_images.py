@@ -237,3 +237,23 @@ def test_publisher_loads_the_scanned_archive_without_rebuilding(
         )
     assert not any(call[0] in {"build", "run"} for call in calls)
     assert sum(call[0] == "push" for call in calls) == 1
+
+
+def test_sensitive_aws_error_reports_only_the_error_code(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from ecr_scan_gate import AwsApiError
+
+    docker = release_images.Docker(tmp_path, sensitive=True)
+    monkeypatch.setattr(
+        release_images.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(
+            returncode=255,
+            stdout="",
+            stderr="An error occurred (ScanNotFoundException): synthetic-private-fixture",
+        ),
+    )
+    with pytest.raises(AwsApiError) as caught:
+        docker.command(["aws", "ecr", "describe-image-scan-findings"])
+    assert caught.value.code == "ScanNotFoundException"
+    assert "synthetic-private-fixture" not in str(caught.value) + capsys.readouterr().out

@@ -1574,7 +1574,11 @@ The local API Dockerfile and cloud API Dockerfile use
 `RUN --mount=type=cache,target=/root/.cache/pip` for dependency installation. They do
 not explicitly pass pip `--no-cache-dir`. That cache mount is a reusable build cache,
 not copied runtime content. Disabling pip caching in that command would undermine
-its intended download reuse. Worker and analytics currently use pip's default cache
+its intended download reuse. Adding pip `--no-cache-dir` to the API dependency
+installation would disable useful download caching without reducing the final
+runtime image size: the BuildKit cache mount is not part of that image. The cache
+still occupies disk space on the build machine; builder disk usage and the size
+of the image published to ECR are separate concerns. Worker and analytics currently use pip's default cache
 in their builder stage without an explicit BuildKit pip cache mount. Their runtime
 stages start separately from `base` and copy only `/opt/venv` plus selected source;
 the builder's `/root/.cache/pip` is not copied. A future cache-mount change there would

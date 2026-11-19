@@ -1231,3 +1231,44 @@ After the environment review, all three publishing jobs in run44536338507 failed
 Terraform now takes an exact `github_oidc_subject_prefix` from public repository metadata and appends the existing environment suffix. Validation rejects wildcards and prefixes for another configured repository; mocked policy tests cover these failures. The immutable setting remains enabled, the audience stays `sts.amazonaws.com`, and no ECR permissions or environment gates are broadened. Inspect this metadata before creating trust for another repository. No JWT, access token or credential file is needed to perform that check. See [GitHub immutable subject claims](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims).
 
 The repair must be planned as one in-place publisher-role trust update, then verified by a fresh protected workflow run. Until that succeeds, OIDC publishing and tag-overwrite rejection remain unverified.
+
+
+Access Analyzer's repaired trust-policy check returned two advisory findings: `CONFIRM_AUDIENCE_CLAIM_TYPE` (SUGGESTION) and `SPECIFIC_GITHUB_REPO_AND_BRANCH_RECOMMENDED` (WARNING). There were no ERROR or SECURITY_WARNING findings. The audience already uses unqualified, single-valued `StringEquals`. The subject also uses exact `StringEquals`, contains no wildcard, and identifies the immutable repository plus the protected environment; main-only eligibility is enforced by that environment's deployment policy and the workflow condition. These findings remain recorded rather than suppressed. This follows GitHub's environment-based trust guidance; no unsupported custom claim is added merely to silence a warning. Recheck these controls when repository identity, subject format, environment rules or workflow permissions change.
+
+
+The exact-subject repair applied successfully with0 additions,1 in-place role change and0 deletions; the subsequent bootstrap plan showed no changes. All PR checks passed and [PR19](https://github.com/23faraaz/CanopyOps/pull/19) was merged. Latest-main verification continues in [run44539346474](https://github.com/23faraaz/CanopyOps/actions/runs/44539346474) for commit `35e35adec6aaf26b8db3cb8cc83dfe1d26a0cd2a`. A superseded manual attempt was cancelled before publishing began. The live OIDC/push and immutability checks remain pending that run's required environment review; do not infer their success from the Terraform apply or policy simulation.
+
+
+### Verified OIDC publication and immutable-tag enforcement
+
+After the owner approved `ecr-publish`, [run44539346474](https://github.com/23faraaz/CanopyOps/actions/runs/44539346474) completed successfully for commit `35e35adec6aaf26b8db3cb8cc83dfe1d26a0cd2a`. All three credential actions succeeded through OIDC, all three saved/scanned artifacts were published, and the complete immutable-release catalogue was uploaded. This is the first successful live publication evidence; the earlier failed run remains part of the troubleshooting record.
+
+| Component | Verified ECR manifest digest | ECR-reported image bytes |
+| --- | --- | ---: |
+| analytics | `sha256:4371b655bf6cfbc9fc785ad82a094d6404b9ac3661af46bd771adeae4bc91b11` | 34,797,243 |
+| api | `sha256:601c04d2e9b7f8384e1de1bf0c186fa381208e16d6acb96c86088bec64e66b57` | 33,226,939 |
+| worker | `sha256:1bb2b0a594c46f11cca6831d1b16f2cca4b1388766241cb75f0ecc53e95be040` | 49,295,609 |
+
+Independent verification downloaded the release catalogue, checked each tag/digest against ECR, hashed each returned raw manifest and compared its configuration digest with the scanned-artifact receipt. For each repository, a differently serialized but valid manifest was submitted under the existing immutable release tag. All three attempts returned `ImageTagAlreadyExistsException`; subsequent reads confirmed the original digests were unchanged. The probes rebuilt no images and changed no release tags. This tests replacement by a different manifest digest, rather than treating an identical-image retry as an overwrite attempt.
+
+The initial independent read used the Terraform management role and was denied `ecr:BatchGetImage`, as intended by the role separation. That role was not broadened. Independent manifest reads and overwrite probes then used the authorized temporary operator profile; the actual publishing jobs used their scoped OIDC role/session permissions. The denied management-role read is separate evidence from publisher authorization and tag immutability.
+
+Total reported image bytes across the three repositories were 117,319,791. This is not deduplicated billed storage, an AWS bill, runtime RAM usage or evidence of compute savings. The earlier retention-based storage estimate remains an assumption. Safe receipts and summaries are retained locally in ignored `backups/ecr-release-manifest.json`, `backups/ecr-publishing-verified.json` and `backups/ecr-activation-summary.json`; image artifacts and CI receipts retain their configured expiration limits.
+
+Repeat the read-only catalogue/digest check in WSL using your approved profiles; no credential values should be printed:
+
+```bash
+# Download only the public release receipts, not an image archive or credentials.
+receipt_directory=$(mktemp -d /tmp/canopy-release-receipts.XXXXXX)
+gh run download 44539346474 --repo 23faraaz/CanopyOps \
+  --name immutable-release-44539346474-1 --dir "$receipt_directory"
+
+# Example: inspect the recorded API release without changing it.
+aws ecr describe-images --region eu-west-2 --profile canopy-terraform \
+  --repository-name canopyops-demo/api \
+  --image-ids imageDigest=sha256:601c04d2e9b7f8384e1de1bf0c186fa381208e16d6acb96c86088bec64e66b57 \
+  --query 'imageDetails[].{Digest:imageDigest,Bytes:imageSizeInBytes}' \
+  --output json --no-cli-pager
+```
+
+The ECR/OIDC publication rehearsal is verified. No ECS service was deployed by this workflow. Terraform plan/deploy/manual-destroy workflows are the next stage. Add central logging and basic service/processing/freshness monitoring alongside ECS, then consider tracing after the end-to-end application works. Active/rollback image retention must be addressed before ECS relies on these repositories.

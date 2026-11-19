@@ -49,10 +49,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/module_checks.py --ci-plugin-token
+  workflow-security:
+    name: Workflow security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Offline workflow security gate and negative controls
+        run: python3 scripts/workflow_security.py --self-test
   checks:
     name: checks
     if: ${{ always() }}
-    needs: [application, terraform, modules]
+    needs: [application, terraform, modules, workflow-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -61,3 +73,4 @@ jobs:
           test '${{ needs.application.result }}' = success
           test '${{ needs.terraform.result }}' = success
           test '${{ needs.modules.result }}' = success
+          test '${{ needs.workflow-security.result }}' = success

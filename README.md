@@ -1707,3 +1707,60 @@ Terraform checks and is included in required `checks`. The 28 positive/negative 
 cases cover security/recovery/configuration contracts; they do not verify regional
 service availability, DNS ownership, live connection behavior, deployed health,
 release rollback or spend. No successful cloud application deployment is claimed.
+
+
+### GitHub dependency and workflow security hardening
+
+The module stage (PR #27) passed all application, root Terraform and 28 module mock
+checks before merging. GitHub hardening is a separate stage; it does not wire modules,
+change AWS permissions, apply resources or claim live application security.
+
+- `.github/dependabot.yml` checks SHA-pinned GitHub Actions weekly on Monday at
+  08:00 Europe/London. Version updates are grouped, limited to three open PRs and
+  have an explicit seven-day release cooldown. GitHub documents that cooldowns do
+  not apply to security updates. Updates require the normal checks and review;
+  no automatic merge or deployment approval is configured.
+- Repository Dependabot security updates were enabled and verified through setting
+  metadata on 19 November 2026. This is a feature-setting check, not evidence that
+  every dependency has a patch or that an update PR has already been generated.
+  Existing lock/hash consistency and vulnerability gates still apply to changes.
+- Provider secret scanning and push protection remain enabled. Generic/non-provider
+  detection remained disabled in both the update response and follow-up metadata.
+  GitHub's current eligibility documentation limits that feature to qualifying
+  organization-owned repositories with Secret Protection. This personal repository
+  does not satisfy that documented eligibility; the feature is not claimed enabled.
+  No paid upgrade, repository transfer or secret-alert inspection was performed.
+- The required CI `checks` aggregate now includes an independent `Workflow security`
+  job alongside application, Terraform and module checks. It uses Zizmor 1.32.0 from
+  the official container pinned by SHA-256, runs offline with network disabled and
+  no token/AWS credential forwarding, and audits only selected workflow YAML and
+  the Dependabot configuration. No local input files or state are mounted.
+- The workflow gate blocks medium-or-higher findings with medium-or-higher confidence.
+  Inline ignore directives are disabled. Synthetic command-injection, mutable-action
+  and ignore-bypass fixtures must all fail on their expected rule. Baseline audit,
+  all three negative controls, Python syntax/Ruff and actionlint passed locally.
+  The initial full audit also reported four LOW recommendations for the newer
+  self-repository syntax; existing supported relative reusable-workflow references
+  remain in place. Offline analysis omits checks requiring GitHub API access and
+  does not establish the security of external action implementations or Python code.
+
+Run the repeatable check from WSL:
+
+```bash
+python3 scripts/workflow_security.py --self-test
+```
+
+Only rule/severity/confidence and file/line metadata are emitted for findings; source
+snippets are not printed. Summaries and diagnostics are retained locally in ignored
+`backups/workflow-security-*`, not uploaded as public artifacts. The tool image pin
+is reviewed separately; the Actions updater does not update Python image constants.
+No workflow security ignore rules or vulnerability exceptions were added.
+
+References: [Dependabot cooldown and security-update behavior](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown),
+[generic-pattern eligibility](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/detect-secret-leaks/enabling-secret-scanning-for-generic-patterns),
+[Zizmor offline mode and audit limits](https://docs.zizmor.sh/usage/).
+
+Scheduled infrastructure drift detection, isolated Terraform state-recovery rehearsal
+and extension of the current network-only plan policy remain separate stages.
+Deployment acceptance later requires live verification of network exposure, TLS,
+IAM restrictions and runtime monitoring; those checks cannot be claimed from linting.

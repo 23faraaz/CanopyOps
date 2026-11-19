@@ -1376,9 +1376,9 @@ python3 scripts/terraform_checks.py --root infra/bootstrap --only security
 
 The workflow roles and prefix-only lifecycle were applied on 19 November 2026:
 13 additions, zero changes/deletions; the follow-up bootstrap plan showed no changes.
-The workflow activation flag remains disabled pending merged source checks.
-Mock tests and static checks do not prove live Terraform OIDC authentication,
-saved-plan transfer, infrastructure deployment or teardown.
+The workflow activation flag was enabled after PR #24 merged and its checks passed.
+Live Terraform OIDC authentication and private saved-plan upload were subsequently
+verified. Infrastructure apply and teardown remain untested pending human review.
 No ECS application deployment is claimed. Plan storage adds S3 request/storage
 usage; IAM roles add no compute resources. Review the bootstrap plan and current
 S3 prices before activation. Lifecycle expiry bounds retention, not aggregate cost.
@@ -1410,3 +1410,31 @@ vulnerability-free status.
 References: [S3 backend permissions and locking](https://developer.hashicorp.com/terraform/language/backend/s3),
 [saved-plan sensitivity](https://developer.hashicorp.com/terraform/cli/commands/plan),
 [GitHub AWS environment trust](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
+
+
+Live Terraform setup verification (19 November 2026):
+
+- PR #24 merged after the required CI passed. The local setup activation input is
+  ignored; actual `.tfvars`, state, plans and `.terraform/` remain excluded from Git.
+- The three environments are main-only. `terraform-deploy` and `terraform-destroy`
+  require owner review; self-review is allowed for this single-operator demo.
+  The plan environment has no human gate because its infrastructure access is read-only;
+  it can still write the exact lock and private plan-prefix objects.
+- Nine live IAM simulation assertions passed: expected demo state/lock/versioned-plan
+  access was allowed, while state deletion, cross-root state access, plan-role state
+  writes and destroy-role creation were denied. Simulation is not a live forbidden-write test.
+- [Plan run 44579271303](https://github.com/23faraaz/CanopyOps/actions/runs/44579271303)
+  succeeded on `9cdcdb2fa039849dd7ee4411879e8e6ca466c43b`. OIDC, source checks,
+  Terraform initialization, native locking, planning and private upload succeeded.
+  The filtered plan proposes 18 network creations, zero updates/deletions. Its saved
+  binary is 9,288 bytes. An independent S3 HEAD verified its exact object version,
+  AES256 encryption, size and checksum metadata without reading the binary or state.
+- [Deploy review 44580053724](https://github.com/23faraaz/CanopyOps/actions/runs/44580053724)
+  passed its unprivileged source/metadata review and waits for `terraform-deploy`
+  approval. This is not yet evidence of successful apply or teardown.
+
+The proposed network-only apply allocates no billable public IPv4 address or running
+application service. An internet gateway itself has no charge; usage and other
+services can incur charges ([AWS internet gateway pricing](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html)).
+Private saved-plan/state storage and requests remain subject to S3 pricing. This is
+not an estimate for the later ECS/RDS/ALB/WAF/endpoints design and not a cost cap.

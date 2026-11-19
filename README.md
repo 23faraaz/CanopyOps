@@ -1478,3 +1478,113 @@ workflow rehearsals. This verifies network lifecycle automation, not ECS deploym
 application release rollback, RDS failover, full database rollback activation or zero
 downtime. Re-running the unchanged demo configuration will propose recreating the
 network; teardown intentionally does not erase its Terraform source.
+
+
+### Proposed ECS design and rehearsal budget ? 19 November 2026
+
+This is a design estimate, not an applied deployment or measured bill. The network
+and ECR modules have implementation; ECS service, database, cache, queue and ingress
+resource files are scaffolds. The reviewed network was torn down after the workflow
+rehearsal. No application AWS resources are created by this documentation change.
+
+```text
+Internet -> HTTPS ALB + WAF -> API/dashboard (container 8000)
+                           -> analytics (container 8081)
+Finite synthetic generator -> SQS -> worker -> private PostgreSQL
+Analytics -> private Redis cache -> PostgreSQL fallback
+```
+
+Keep one demo environment in eu-west-2. API/dashboard, worker and analytics are the
+three ECS services; the generator is a separate finite task. Laptop ports 8001/8002
+are Compose mappings, not the container listener ports. Keep metrics private. The
+worker has no public listener. Preserve persisted readings during migration and keep
+reader, writer and migration database privileges separate. Existing local monitoring
+remains available; cloud reading-freshness telemetry and alert delivery need their
+own implementation/verification and cost allowance before deployment claims.
+
+The no-NAT design assumes five interface endpoint services in both application AZs:
+ECR API, ECR Docker, CloudWatch Logs, Secrets Manager and SQS. Add an S3 gateway
+endpoint for ECR layers and associate the necessary route tables. Recheck this list
+against actual runtime calls; do not add endpoints simply to fill a diagram. Images
+must come from ECR. Private DNS, endpoint policies, scoped execution/task roles and
+security-group flows must all be verified. See [AWS ECR endpoint requirements](https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html).
+
+Planning assumptions: three Linux x86 tasks, each 0.5 vCPU/1 GiB; one task per service
+initially; one ALB with one used LCU allowance and two public IPv4 addresses; five
+interface endpoints across two AZs; Multi-AZ RDS PostgreSQL db.t4g.micro with 20 GB
+gp3; one Redis cache.t4g.micro; one WAF ACL with two ordinary rules. Instance/engine
+compatibility and worker/analytics capacity still require verification. One task per
+service and one cache node are baseline availability limitations. Use brief extra-task
+or resilience exercises only with separate justification and cost approval.
+
+| Component | Approximate hourly cost | 24-hour estimate |
+| --- | ---: | ---: |
+| Three Fargate tasks | $0.08517 | $2.04 |
+| Ten interface-endpoint AZ placements | $0.11000 | $2.64 |
+| ALB, one LCU allowance and two public IPv4 addresses | $0.04486 | $1.08 |
+| Multi-AZ PostgreSQL and 20 GB gp3 | $0.04329 | $1.04 |
+| One Redis node | $0.01800 | $0.43 |
+| WAF ACL and two rules | $0.00959 | $0.23 |
+| **Baseline** | **$0.31091** | **$7.46** |
+
+Rates checked in public AWS London price lists: Fargate $0.04656/vCPU-hour and
+$0.00511/GiB-hour; interface endpoints $0.011/AZ-hour; ALB $0.02646/hour plus
+$0.0084/used LCU-hour; public IPv4 $0.005/address-hour; Multi-AZ db.t4g.micro
+$0.036/hour and gp3 $0.266/GB-month; Redis cache.t4g.micro $0.018/hour. WAF assumes
+$5/ACL-month plus $1/rule-month. Monthly-to-hourly calculations use a 730-hour
+planning convention; actual bills, rounding and usage can differ. No credits,
+reserved pricing or measured performance savings are assumed.
+
+Sources: [Fargate](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/eu-west-2/index.json),
+[ALB](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/current/eu-west-2/index.json),
+[VPC endpoints](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/eu-west-2/index.json),
+[public IPv4](https://aws.amazon.com/vpc/pricing/),
+[RDS](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/current/eu-west-2/index.json),
+[Redis](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonElastiCache/current/eu-west-2/index.json),
+[WAF](https://aws.amazon.com/waf/pricing/).
+
+The same baseline is approximately $3.73/12 hours or $52.23/week. Prefer two six-hour
+rehearsal sessions and reserve headroom within the $20?30 total budget. These figures
+exclude domain registration, tax, logs/metrics, secrets, SQS requests, data transfer,
+backup/retained ECR/S3 storage, database CPU-credit charges, generator/migration tasks,
+provisioning/deletion time and rolling-deployment overlap. They are not a full-stack
+quote or cost cap. Budget alerts do not enforce a hard spending stop. Price the
+remaining choices and existing retained costs before approving paid resources; start
+the clock when resources become billable and verify teardown afterward.
+
+No domain is owned yet. Choose and price registration before counting it inside the
+same budget. Terraform can later request and DNS-validate a non-exportable ACM public
+certificate for the ALB. [ACM pricing](https://aws.amazon.com/certificate-manager/pricing/)
+lists that certificate type at no additional cost; registration and DNS are separate.
+[Route 53](https://aws.amazon.com/route53/pricing/) lists $0.50/month for a first-tier
+hosted zone, generally not prorated for partial months. Domain/DNS selection remains
+open; nothing is purchased here.
+
+Next focused milestone: define the allowed-traffic matrix and implement tagged
+security groups first. Then add the justified private endpoints, followed by scoped
+ECS task/execution roles. Before a workflow can plan/apply these, deliberately extend
+its network-only resource allowlist, sanitized review fields, IAM permissions and
+negative tests. Keep the manual review gate and separate bootstrap/registry state.
+Later stages add SQS, RDS/Redis, ALB/WAF/ACM, ECS services, migration and release-recovery
+measurements. Target zero downtime until measured evidence supports a stronger claim.
+
+### Docker package caches: source inspection
+
+The local API Dockerfile and cloud API Dockerfile use
+`RUN --mount=type=cache,target=/root/.cache/pip` for dependency installation. They do
+not explicitly pass pip `--no-cache-dir`. That cache mount is a reusable build cache,
+not copied runtime content. Disabling pip caching in that command would undermine
+its intended download reuse. Worker and analytics currently use pip's default cache
+in their builder stage without an explicit BuildKit pip cache mount. Their runtime
+stages start separately from `base` and copy only `/opt/venv` plus selected source;
+the builder's `/root/.cache/pip` is not copied. A future cache-mount change there would
+be a build-efficiency experiment, not an established runtime image-size saving.
+
+`apk add --no-cache` controls the Alpine package-manager cache. Docker build
+`--no-cache` controls layer reuse. Pip `--no-cache-dir` controls pip's download/wheel
+cache. They are different controls. Dependency layers remain before source code.
+BuildKit cache persistence across fresh CI runners requires explicit configuration;
+its presence in a Dockerfile alone does not prove cross-run cache reuse. This was
+source inspection, not a new image build or filesystem-size measurement. No Dockerfile
+was changed. References: [Docker cache mounts](https://docs.docker.com/build/cache/optimize/),
+[pip caching](https://pip.pypa.io/en/stable/topics/caching/).

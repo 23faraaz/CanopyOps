@@ -1599,9 +1599,9 @@ was changed. References: [Docker cache mounts](https://docs.docker.com/build/cac
 The five previously empty modules now contain resources, validated inputs, outputs,
 provider contracts and mock tests. `infra/main.tf` still calls only the network
 module. No AWS plan/apply, credential/profile use, database write or runtime service
-change was performed for this implementation. Local `.tfvars` and `.tfvars.example`
-files were not opened. Inputs below are contracts to fill/review later, not evidence
-that dependency resources already exist.
+change was performed for this implementation. CI validates modules using fictional
+test inputs, without loading local variable files or AWS credentials. Inputs below
+are contracts to fill/review later, not evidence that dependency resources already exist.
 
 | Module | Implemented behavior | Required caller dependencies |
 | --- | --- | --- |

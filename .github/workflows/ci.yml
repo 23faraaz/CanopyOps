@@ -9,8 +9,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  checks:
-    name: checks
+  application:
+    name: Application checks
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -35,3 +35,29 @@ jobs:
           assert not remaining, "Scan temporary directories remain"
           print("Scan workspace cleanup verified")
           PY
+  terraform:
+    name: Terraform ${{ matrix.check }} (${{ matrix.root }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [infra, infra/bootstrap]
+        check: [format, validate, lint, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Credential-free Terraform check
+        run: python3 scripts/terraform_checks.py --root '${{ matrix.root }}' --only '${{ matrix.check }}'
+  checks:
+    name: checks
+    if: ${{ always() }}
+    needs: [application, terraform]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require application and every Terraform matrix job
+        run: |
+          test '${{ needs.application.result }}' = success
+          test '${{ needs.terraform.result }}' = success

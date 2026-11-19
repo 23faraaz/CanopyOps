@@ -31,6 +31,10 @@ resource "aws_s3_bucket_public_access_block" "terraform_state" {
   restrict_public_buckets = true
 }
 
+# Single demo state bucket: deliberately use SSE-S3, not a customer-managed KMS key.
+# IAM, TLS-only access, versioning and public-access blocking remain mandatory.
+# Reassess key-policy separation before broader use; review expires 2026-12-19.
+#trivy:ignore:AVD-AWS-0132:exp:2026-12-19
 resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
   bucket = aws_s3_bucket.terraform_state.id
 

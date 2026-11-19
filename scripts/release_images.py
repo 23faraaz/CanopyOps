@@ -16,6 +16,7 @@ import subprocess
 import tarfile
 import tempfile
 
+from ecr_scan_gate import check as native_scan_gate
 from terraform_checks import TRIVY
 from checks import HADOLINT, ACTIONLINT
 
@@ -426,6 +427,13 @@ def publish(args):
             or json.loads(remote)["config"]["digest"] != meta["config_digest"]
         ):
             raise ValueError("Published manifest does not match the scanned image configuration")
+        native = native_scan_gate(
+            aws,
+            args.account,
+            repository,
+            digest,
+            Path(args.receipt).with_suffix(".native-scan.json"),
+        )
         receipt = {
             "component": args.component,
             "commit": args.commit,
@@ -435,6 +443,7 @@ def publish(args):
             "config_digest": meta["config_digest"],
             "archive_sha256": meta["archive_sha256"],
             "published_at": datetime.now(timezone.utc).isoformat(),
+            "native_scan": native,
         }
         path = Path(args.receipt)
         path.parent.mkdir(parents=True, exist_ok=True)

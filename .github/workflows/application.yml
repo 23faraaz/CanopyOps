@@ -70,7 +70,7 @@ jobs:
     needs: [build_scan, release_artifacts]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.ECR_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: ecr-publish
     env:
       AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
@@ -122,7 +122,7 @@ jobs:
           inline-session-policy: >-
             {"Version":"2012-10-17","Statement":[
             {"Effect":"Allow","Action":"ecr:GetAuthorizationToken","Resource":"*"},
-            {"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:InitiateLayerUpload","ecr:UploadLayerPart","ecr:CompleteLayerUpload","ecr:PutImage","ecr:BatchGetImage","ecr:DescribeRepositories"],
+            {"Effect":"Allow","Action":["ecr:BatchCheckLayerAvailability","ecr:InitiateLayerUpload","ecr:UploadLayerPart","ecr:CompleteLayerUpload","ecr:PutImage","ecr:BatchGetImage","ecr:DescribeRepositories","ecr:DescribeImageScanFindings"],
             "Resource":"arn:aws:ecr:eu-west-2:${{ vars.AWS_ACCOUNT_ID }}:repository/${{ vars.ECR_REPOSITORY_PREFIX || 'canopyops-demo' }}/${{ matrix.component }}"}]}
       - name: Publish the saved image and verify its ECR configuration digest
         run: >-
@@ -133,6 +133,14 @@ jobs:
           --account "$AWS_ACCOUNT_ID"
           --prefix "$ECR_REPOSITORY_PREFIX"
           --receipt '${{ runner.temp }}/published/${{ matrix.component }}.json'
+      - name: Retain native ECR report on success or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-ecr-${{ matrix.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published/${{ matrix.component }}.native-scan.json
+          retention-days: 7
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-${{ matrix.component }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -160,6 +168,8 @@ jobs:
           assert len(records) == 3
           assert {r['component'] for r in records} == {'api', 'worker', 'analytics'}
           assert all(r['commit'] == '${{ github.sha }}' for r in records)
+          assert all(r['native_scan']['status'] == 'COMPLETE' for r in records)
+          assert all(not r['native_scan']['counts'].get(s, 0) for r in records for s in ['HIGH', 'CRITICAL'])
           Path('${{ runner.temp }}/release-manifest.json').write_text(json.dumps(records, indent=2) + '\n')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

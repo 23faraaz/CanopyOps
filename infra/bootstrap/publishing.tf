@@ -55,7 +55,7 @@ resource "aws_iam_role_policy" "github_publisher" {
         Action = [
           "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
-          "ecr:BatchGetImage", "ecr:DescribeRepositories"
+          "ecr:BatchGetImage", "ecr:DescribeRepositories", "ecr:DescribeImageScanFindings"
         ]
         Resource  = local.registry_arns
         Condition = { StringEquals = { "aws:RequestedRegion" = var.aws_region } }

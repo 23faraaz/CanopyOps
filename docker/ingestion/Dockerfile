@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89 AS base
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
-RUN apk add --no-cache zlib=1.4-r0 krb5-libs=1.22.3-r0
+# Alpine 3.5.9-r1 backports the November OpenSSL security fixes.
+RUN apk add --no-cache zlib=1.4-r0 krb5-libs=1.22.3-r0 libcrypto3=3.5.9-r1 libssl3=3.5.9-r1
 # PostgreSQL-only image: retain other Python providers, exclude unused SQLite.
 RUN apk --no-network info --depends .python-rundeps 2>/dev/null | sed -n '/^so:/p' | grep -v '^so:libsqlite3' > /tmp/providers \
     && xargs apk --no-network add --virtual .queue-rundeps < /tmp/providers \

@@ -1272,3 +1272,12 @@ aws ecr describe-images --region eu-west-2 --profile canopy-terraform \
 ```
 
 The ECR/OIDC publication rehearsal is verified. No ECS service was deployed by this workflow. Terraform plan/deploy/manual-destroy workflows are the next stage. Add central logging and basic service/processing/freshness monitoring alongside ECS, then consider tracing after the end-to-end application works. Active/rollback image retention must be addressed before ECS relies on these repositories.
+
+
+### Native ECR scan findings after the first successful publication
+
+The successful OIDC run and Trivy HIGH/CRITICAL gate did not establish a clean native ECR report. ECR BASIC scans completed for all three recorded digests and reported OpenSSL3.5.9-r0 with four HIGH findings (`CVE-2026-107496`, `CVE-2026-95691`, `CVE-2026-88823`, `CVE-2026-95692`) and one MEDIUM (`CVE-2026-88822`). The initial digests above remain historical publishing/immutability evidence; do not approve them for ECS merely because the workflow was green.
+
+[OpenSSL upstream](https://www.openssl-library.org/news/vulnerabilities-3.5/) rates these issues LOW and identifies CMS encryption with attacker-controlled EC recipients, QUIC processing, or unusual AES-GCM-SIV usage as the affected paths. The application has no CMS/QUIC/AES-GCM-SIV feature, but that is not a risk acceptance or sufficient evidence to remove findings. [Alpine3.24 security metadata](https://secdb.alpinelinux.org/v3.24/main.json) lists all five as fixed by the3.5.9-r1 backport. The cloud Dockerfiles now pin `libcrypto3=3.5.9-r1` and `libssl3=3.5.9-r1` in the common builder/runtime base. The upstream3.5.9 version string alone cannot distinguish r0 from this vendor backport.
+
+The root local/SQLite Dockerfile, application code, locks, user, startup commands and writable paths are unchanged. No vulnerability gate, severity threshold or exception was changed. Candidate builds and fresh publication/native scan verification are required before claiming these findings resolved. Native ECR checking is currently an explicit operator verification after publishing; it is not yet a post-push CI gate.

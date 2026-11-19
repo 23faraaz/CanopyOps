@@ -18,7 +18,7 @@ import tempfile
 
 from ecr_scan_gate import AwsApiError, check as native_scan_gate
 from terraform_checks import TRIVY
-from checks import HADOLINT, ACTIONLINT
+from checks import HADOLINT, lint_workflows
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = {
@@ -342,17 +342,7 @@ def lint():
                 "hadolint",
                 "/Dockerfile",
             )
-        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
-            docker.run(
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--mount",
-                f"type=bind,source={workflow},target=/workflow.yml,readonly",
-                ACTIONLINT,
-                "/workflow.yml",
-            )
+        lint_workflows(docker.run)
     print("Release Dockerfile and workflow lint passed; no application image built")
 
 

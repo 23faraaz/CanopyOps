@@ -77,7 +77,7 @@ Existing application gaps remain visible: four woodland station IDs, no event se
 
 The next automation stages remain separate, focused commits:
 
-1. Add Terraform format/validation, lint and security checks. Independent checks can run in parallel; a matrix can cover the bootstrap/demo roots, without implying support for extra Python versions.
+1. Terraform format/validation, lint and security checks are implemented in the credential-free matrix described below. Authenticated deployment plans remain separate; this matrix does not add supported Python versions.
 2. Add encrypted, immutable ECR repositories and scoped GitHub OIDC roles. Review the Terraform plan and costs before applying. No static AWS keys or cloud SQLite waiver.
 3. Application publishing workflow: parallel unit/lint checks, then parallel build/scan jobs for the cloud API, worker and analytics. Publish the exact scanned artifacts only after required checks pass, retaining immutable digests. Pull requests receive no publishing credentials.
 4. Terraform infrastructure workflow: checks -> plan -> reviewed apply -> deployed-version/end-to-end checks. Terraform remains the owner of desired ECS image digests. Automatically request and DNS-validate ACM certificates before configuring HTTPS. Private RDS/Redis, endpoint networking and all paid services require a complete cost review first.
@@ -149,6 +149,52 @@ The base and all five overlay contents are unchanged. Seven effective configurat
 Validation passed: 75 Python tests, syntax/Ruff checks, Dockerfile/workflow lint, Compose configuration, alert fixtures and image builds. A fresh isolated `python3 scripts/verify_analytics.py --cache` run verified calculations, expiry, fallback, database interruption and graceful shutdown; its resources were removed afterward. The live read-only `python3 scripts/verify_local_endpoints.py` check passed for dashboard assets, both APIs, health, metrics, Grafana and Redis. Four stations were fresh and persisted events advanced from 36,440 to 36,444. Original container IDs and volume bindings were unchanged.
 
 Raw local evidence remains ignored under `backups/compose-layout-52562ddbfe7747e1acfcc1a414ee2d3b/`, `backups/analytics-c53fbe88843a4981a9041469464d3ff5/` and the endpoint verifier's timestamped directory. These checks establish local behaviour, not AWS deployment or availability.
+
+## Terraform checks without AWS credentials (19 November 2026)
+
+The CI workflow now runs **eight independent Terraform jobs**: formatting, validation, TFLint and security for each of `infra/` and `infra/bootstrap/`. They run alongside the existing application job, with `fail-fast: false` so one failure does not hide the other results. The existing branch-protection context **`checks`** is now an always-running aggregate that succeeds only if the application job and the complete Terraform matrix succeed. No additional branch-protection bypass or AWS identity was added. The workflow still has only `contents: read`, with no OIDC token permission, AWS secrets or deployment commands.
+
+```mermaid
+flowchart LR
+  PR[PR or main push] --> A[Application checks]
+  PR --> T[Terraform: 2 roots x 4 checks]
+  A --> G[Required checks gate]
+  T --> G
+```
+
+`scripts/terraform_checks.py` provides the same commands locally in WSL/Linux with Docker. It copies only tracked Terraform source, public examples and provider locks into a temporary directory. Demo checks exclude the separate bootstrap root; bootstrap checks include only bootstrap sources. Actual `.tfvars`, state, plans, local `.terraform` contents, `.env`, credential directories and source symlinks are excluded. Public examples are not automatically loaded as real inputs. Empty temporary HOME/Docker configurations and literal child environments prevent use of existing AWS profiles or Docker logins. The unrelated Grafana edit is outside the copy scope.
+
+```bash
+# WSL, repository root; these do not initialize the working checkout:
+python3 scripts/terraform_checks.py --root infra
+python3 scripts/terraform_checks.py --root infra/bootstrap
+
+# The individual checks used by the CI matrix:
+python3 scripts/terraform_checks.py --root infra --only format
+python3 scripts/terraform_checks.py --root infra --only validate
+python3 scripts/terraform_checks.py --root infra --only lint
+python3 scripts/terraform_checks.py --root infra --only security
+```
+
+Validation initializes **only the temporary source copy**, using `terraform init -backend=false -input=false -lockfile=readonly`. This downloads the provider selected by the committed lock without configuring S3 or upgrading dependencies. Subsequent validation and mocked tests run in containers with networking disabled and AWS metadata/config/credential discovery disabled or directed to empty inputs. Bootstrap also runs the existing mocked-provider IAM-policy test, including its ten boundary assertions. No real plan, refresh, state migration, apply or destroy is performed. Static validation is not evidence of live IAM authorization, quota availability or absence of infrastructure drift. [HashiCorp validation guidance](https://developer.hashicorp.com/terraform/cli/commands/validate)
+
+Tools use digest-pinned images: Terraform **1.17.2**, TFLint **0.66.0** and Trivy **0.76.2**. Both roots retain the AWS provider **6.73.0** selected by their existing locks. `infra/.tflint.hcl` enables the bundled recommended Terraform rules and AWS ruleset **0.50.0**; plugin initialization downloads the pinned public release, then lint runs without networking. Lint covers each root and non-empty child modules, currently only `network`; empty scaffolds are not presented as implemented infrastructure. The network module now explicitly declares its Terraform/provider compatibility contract. It does not configure another provider instance or change resources.
+
+The Trivy gate uses `--exit-code 1 --severity HIGH,CRITICAL`. Its checks are the pinned tool's bundled policies (`--skip-check-update`), run offline on the isolated source copy. A separate LOW/MEDIUM scan reports advisory findings without blocking that declared severity gate. Its exit1 is recorded as findings rather than falsely described as a clean scan. Scanner errors or malformed reports fail the check. Updating pinned tools/policies remains an explicit maintenance action; this is not a continuously refreshed or exhaustive cloud audit.
+
+| Finding | Decision and remaining limitation |
+| --- | --- |
+| **AVD-AWS-0132, HIGH:** customer-managed KMS key recommended for state encryption | One resource-specific inline exception on `aws_s3_bucket_server_side_encryption_configuration.terraform_state`, expiring **19 December 2026**. The selected single-demo baseline remains AES256/SSE-S3 with IAM restrictions, HTTPS-only access, public-access blocking and versioning. This is encrypted storage, but lacks a separate customer-managed key-policy control. It is not a production approval; reassess before extending scope. No new KMS resources, key policy or AWS permissions are introduced merely to silence a scanner. |
+| **AVD-AWS-0178, MEDIUM:** VPC flow logs missing | Remains visible and unsuppressed. Review reject-flow logging, permissions, retention and cost before deploying application infrastructure; the rehearsed VPC is currently torn down. |
+| **AVD-AWS-0089, LOW:** state bucket access logs missing | Remains visible and unsuppressed. Review an audit/log destination, access controls, retention and cost before extending the deployment. Existing bucket protections do not substitute for access auditing. |
+
+SSE-S3 and SSE-KMS are distinct encryption/key-control choices, not encryption versus plaintext. Terraform state can contain sensitive data; keep it private and do not commit or upload it as CI evidence. [AWS encryption options](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingEncryption.html)
+
+The exception uses Trivy's native resource-scoped expiring comment, not a global ignore or disabled check. Each bootstrap security job also performs three static negative controls in its temporary copy: remove the exception, expire it, and add a different SSE-S3 encryption resource. All three must produce exit1 and the expected customer-key finding on the unexempted resource. This proves the exception expires and cannot silently exempt a second resource. The canary resource is never planned or deployed. [Trivy inline exceptions](https://trivy.dev/docs/latest/scanner/misconfiguration/config/config/)
+
+Local verification passed both roots' format/init/validate/lint/security gates, the existing mock-policy run and all three exception controls. Source-only Python checks passed **104 tests**, syntax/Ruff and workflow actionlint; one existing Starlette/httpx deprecation warning remains. Tests also check rejection of private input/state paths, root isolation and symlink refusal before copying. Safe raw results remain ignored under `backups/terraform-checks-8a80f9e13c174607b54780f25e131842/` (demo), `backups/terraform-checks-f786f0f5b0e5441cb2fb835c1d6c8b33/` (bootstrap) and `backups/terraform-python-checks.log`. Passing gates include the documented exception and remaining advisories; they do not mean zero security issues.
+
+No AWS resources, live state, application readings, container configuration or SQLite exception changed in this stage. ECR/OIDC publishing, authenticated Terraform plan/deploy and a separate manual destroy workflow remain next. Before those apply operations, review actual permission requirements, private connectivity, certificate validation and the complete London cost estimate.
 
 ## Terraform authentication and remote-state baseline (18 November 2026)
 

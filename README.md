@@ -1764,3 +1764,57 @@ Scheduled infrastructure drift detection, isolated Terraform state-recovery rehe
 and extension of the current network-only plan policy remain separate stages.
 Deployment acceptance later requires live verification of network exposure, TLS,
 IAM restrictions and runtime monitoring; those checks cannot be claimed from linting.
+
+
+### Network security groups: service-connection source milestone
+
+`infra/modules/network-security` now defines eight component groups and a single
+`local.connections` map for ten permitted TCP flows. Each stable map key creates
+one destination ingress rule and one source egress rule through `for_each`.
+
+| Source group | Destination group | TCP port |
+| --- | --- | ---: |
+| ALB | API | 8000 |
+| ALB | Analytics | 8081 |
+| API, worker, analytics | PostgreSQL | 5432 |
+| Analytics | Redis | 6379 |
+| API, analytics, worker, generator | Interface endpoints | 443 |
+
+These are 20 directional rules using SG references, with no VPC-wide/public CIDR
+allowance. Generator-to-database/cache traffic and metrics port 9100 remain closed.
+Endpoint network reachability does not grant AWS service permissions; later IAM and
+endpoint policies must restrict each role and resource separately. PostgreSQL SG
+access does not grant SQL reader/writer/migration privileges.
+
+The original standalone ALB/API pair has module-local `moved` declarations pointing
+to its new map-key addresses. This preserves address continuity if a caller already
+managed that pair; no actual state was read or migrated to produce this refactor.
+
+The existing source-only module checker now includes network-security. Its five
+mock cases verify paired directionality, restricted PostgreSQL/Redis sources,
+absence of CIDR/metrics access in service rules, generator isolation, task-only
+HTTPS endpoint access and the ALB's two application ports. Formatting, provider
+validation, all five cases, TFLint and strict HIGH/CRITICAL scanning passed locally.
+They verify Terraform configuration, not live reachability or protection from
+out-of-band changes/additional attached security groups.
+
+From the repository root:
+
+```bash
+python3 scripts/module_checks.py --module network-security
+```
+
+From `infra/modules/network-security`:
+
+```bash
+python3 ../../../scripts/module_checks.py --module network-security
+```
+
+This module is not called by the root configuration yet. Public ALB 80/443 ingress,
+S3-prefix-list HTTPS egress for image layers, actual private endpoint resources and
+policies, and optional collector-only metrics access remain separate work. Keep
+those flows explicit; do not introduce allow-all egress to make startup work.
+Review the root plan guard and narrowly scoped IAM before connecting/applying new
+resource types. No AWS changes or application connectivity claims accompany this
+source milestone. Verification uses inline fictional inputs without local variable
+files or AWS credentials.

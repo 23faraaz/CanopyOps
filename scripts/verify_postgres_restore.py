@@ -1,5 +1,6 @@
 """Back up the current PostgreSQL application schema and restore a separate guarded database."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -12,9 +13,20 @@ from pathlib import Path
 
 from verify_docker import ROOT
 from verify_recovery import decode
+from postgres_rehearsal import restore_configuration, restore_images, verify_versions
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--target-postgres-image",
+        help="Optional same-major official major.minor-bookworm image pinned by SHA256; never changes the source",
+    )
+    args = parser.parse_args()
+    pg_image = re.search(
+        r"image: (postgres:\S+)", (ROOT / "docker/compose/postgres.yaml").read_text()
+    ).group(1)
+    pg_image, target_image = restore_images(pg_image, args.target_postgres_image)
     run_id = uuid.uuid4().hex
     project = "canopyrestore" + run_id[:10]
     source_project = "canopybackupsource" + run_id[:10]
@@ -82,16 +94,15 @@ def main():
     source_info = json.loads(execute("docker", "inspect", originals["postgres"]["id"]))[0]
     source_network = next(iter(source_info["NetworkSettings"]["Networks"]))
     source_host = source_info["Name"].lstrip("/")
-    pg_image = re.search(
-        r"image: (postgres:\S+)", (ROOT / "docker/compose/postgres.yaml").read_text()
-    ).group(1)
     image = "canopyops-restore:" + run_id
+    print("Building the disposable rehearsal image; this may take a few minutes...", flush=True)
     execute("docker", "build", "-q", "-t", image, ".")
     report.update(
         originals=originals,
         git_commit=execute("git", "rev-parse", "HEAD").strip(),
         test_image=execute("docker", "image", "inspect", image, "--format", "{{.Id}}").strip(),
         postgres_client_image=pg_image,
+        target_postgres_image=target_image,
     )
     secret_dir = Path(
         os.environ.get("CANOPY_SECRETS_DIR", str(ROOT.parent / "CanopyOps-secrets"))
@@ -192,6 +203,7 @@ def main():
         json.dumps(
             {
                 "services": {
+                    "postgres": {"image": target_image},
                     "api": {
                         "image": image,
                         "environment": {"PGDATABASE": target},
@@ -228,7 +240,7 @@ def main():
         return execute(*compose, *args)
 
     def validate():
-        config = json.loads(dc("config", "--format", "json"))
+        config = restore_configuration(dc, pg_image, target_image)
         for volume in config.get("volumes", {}).values():
             if (
                 volume.get("external")
@@ -253,7 +265,10 @@ def main():
 
     success = False
     try:
+        report["phase"] = "validating_target_configuration"
+        save()
         validate()
+        report["phase"] = "preparing_source_snapshot"
         save()
         print(
             "Taking a consistent online PostgreSQL snapshot; source writes continue...", flush=True
@@ -330,6 +345,20 @@ def main():
             "SELECT run_id FROM restore_control.guard",
         )
         assert run_id in guard
+        target_version_num = dc(
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "restore-client",
+            "psql",
+            "--no-password",
+            "-Atc",
+            "SHOW server_version_num",
+        ).strip()
+        report["version_rehearsal"] = verify_versions(
+            report["source_server_version"], target_version_num, pg_image, target_image
+        )
         started = time.monotonic()
         dc(
             "run",
@@ -393,7 +422,8 @@ def main():
         report.update(status="failed", error_type=type(exc).__name__)
         save()
         raise RuntimeError(
-            "Backup/restore rehearsal failed; local diagnostics retained; no source writes issued"
+            f"Backup/restore rehearsal failed during {report.get('phase', 'preflight')} "
+            f"({type(exc).__name__}); diagnostics: {folder}; no source writes issued"
         ) from None
     finally:
         (folder / "release-snapshot").write_text("release\n")

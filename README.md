@@ -2126,3 +2126,58 @@ exact certificate reads, wrong-account/region rejection and IAM policy quotas.
 Formatting, provider validation, TFLint and strict HIGH/CRITICAL scanning passed;
 a copied bootstrap initialized/validated with its backend disabled. No AWS
 permission simulation, live plan or apply was performed by the agent.
+
+### PostgreSQL 17.11 candidate restore rehearsal
+
+The existing guarded restore controller accepts `--target-postgres-image` for a
+same-major candidate. Its default still uses the current pinned PostgreSQL image.
+The override changes only the newly created target server, not the source,
+its volume or the 17.12 client used for both dump and restore. Image references
+must use the official `postgres:major.minor-bookworm` name and a SHA256 digest;
+major changes, unpinned/untrusted references and a wrong actual target version
+are rejected. The report records source/client/target versions and the minor lag.
+
+Run yourself from the repository root with the working local PostgreSQL stack
+and existing runtime secret mounts available:
+
+```bash
+python3 scripts/verify_postgres_restore.py \
+  --target-postgres-image postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994
+```
+
+This command authenticates through existing runtime password-file mounts; it
+must be operator-run under the current credential restriction. The agent does
+not open those files or run this drill. It takes a repeatable-read, read-only
+source snapshot and a matching schema dump, then restores a new guarded database
+on a separate uniquely named volume. Existing row/state/timestamp/schema hashes,
+deduplication, SQL permissions, API assets/health/private metrics and source-volume
+preservation checks still apply. Source writes continue; this is not a cutover.
+Success cleans up only the drill's isolated resources and retains the sensitive
+backup/evidence locally. Failure keeps diagnostics; inspect the specific cause
+without deleting original volumes or treating the run as passed.
+
+Share only the resulting `summary.json` verification fields, not the dump,
+credentials or whole evidence directory. Before cloud configuration proceeds,
+require a passed report showing target `170011` and matching source/restored
+manifests. This tests the actual persisted dataset; fresh regenerated readings
+are not a substitute. Upstream-container success does not prove RDS TLS, SQL
+permissions, extensions or security-patch equivalence; rehearse those on RDS
+before cutover and recheck its available patches.
+[PostgreSQL version compatibility](https://www.postgresql.org/docs/17/upgrading.html),
+[pg_dump guidance](https://www.postgresql.org/docs/17/app-pgdump.html).
+
+Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eleven passed
+under Python 3.12, with changed-source formatting and lint checks. The candidate
+image was pulled anonymously and its binary version probed without host data
+mounts or network. No live-source rehearsal or migration success is claimed by this code.
+Application preparation remains `redis_version="7.1"`, `redis_user_ids=[]` and
+`activate_services=false`; workflow/input integration follows the rehearsal.
+
+The first candidate run exposed an early configuration bug: plain Compose config
+omitted the tools-profile restore client, so the new image guard raised KeyError
+before the source snapshot started. Validation now renders with `--profile tools`
+and reports a controlled configuration error if the service is absent. Eleven
+offline tests and a real Compose render of fictional services passed. Failure
+messages now include the safe phase, error type and evidence path, and image
+build progress is announced. This fixes the controller; it is not a passed
+real-data restore. Keep existing failed-run evidence and original volumes intact.

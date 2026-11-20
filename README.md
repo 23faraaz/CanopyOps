@@ -1341,13 +1341,15 @@ rules apply only to the plan prefix: current and noncurrent expiration are each
 one day, with asynchronous processing and UTC rounding. This is not a hard two-day
 erasure guarantee. State and lock keys are outside the expiry prefix.
 
-The controller deliberately supports only the six existing network resource types.
-Apply rejects deletes, replacements, imports and moves; destroy accepts deletion
-only. Extending this to ECS, RDS or other services requires a new scope, IAM and cost
-review. The committed `infra/terraform.tfvars.example` is the explicit non-secret
-configuration used by CI; actual local `.tfvars` files are never uploaded. The demo
-backend retains its existing default state key and native S3 locking, with an
-explicit workspace-listing prefix. Bootstrap and registry roots remain separate.
+The initial rehearsal supported six network resource types. The controller now
+also checks application resources through the explicit cloud plan-policy guard;
+retained foundation deletion remains forbidden. Apply rejects destructive changes,
+imports and moves, with only the reviewed ECS task-definition replacement exception.
+Destroy accepts deletion only within its fixed disposable-resource targets. Current
+workflow inputs come from the strict public `infra/deployment.json` document
+(described below), replacing the original example-input dependency. Local variable
+files are never copied. The demo backend retains its existing default state key
+and native S3 locking. Bootstrap and registry roots remain separate.
 
 Operation sequence after setup verification:
 
@@ -2216,3 +2218,50 @@ The local restore gate is now met for this run. Next prepare reviewed applicatio
 inputs with PostgreSQL `17.11` as the candidate, Redis `7.1`, `redis_user_ids=[]`
 and `activate_services=false`, then connect those inputs to the guarded workflow
 and review the infrastructure plan before any application deployment.
+
+
+### Reviewed cloud deployment inputs (application tasks stopped)
+
+`infra/deployment.json` is public deployment metadata, not a credential file. It
+selects the operator-confirmed London certificate, delegated hosted zone, runtime
+boundary and all three image digests from publishing run `44744564031`, attempt 1,
+source commit `74155727c75bbfb05d65d8b9e6b7035db120c2d9`. It contains no password,
+secret value or database connection string. Local variable files are not loaded by
+the workflow. CI validates a strict field allowlist and rejects unknown fields.
+
+The initial configuration selects PostgreSQL `17.11` and Redis `7.1`, with
+`activate_services=false`, `pause_ingestion=true` and `redis_user_ids=[]`. Services
+remain at zero desired tasks, ingestion is fenced and the Redis cache is deferred.
+This does not migrate data, provision secret values or start a synthetic producer.
+The final-snapshot name is a candidate; check its uniqueness before teardown.
+
+Before AWS authentication, the controller checks that the selected publishing run
+is a successful main-branch application workflow in this repository. It verifies
+the three artifact receipts against the selected commit, run, attempt, digests and
+recorded native ECR scan results. Missing/expired release artifacts fail closed;
+publish a new verified release and review the updated metadata rather than bypass
+this check. Recorded scans describe publication time, not today's vulnerability
+status: recheck live ECR findings before approving deployment.
+
+Planning writes only the validated `inputs` object to a disposable runner file.
+Saved-plan metadata schema 2 binds the full document, its SHA256, source commit,
+provider lock and backend to the encrypted versioned S3 plan. Apply compares the
+saved plan's input values with that document and consumes the exact reviewed
+binary/version/checksum; it does not re-plan. Old schema-1 metadata is rejected,
+so generate a fresh plan after this change. The teardown-preflight producer and
+reader now share a tested contract.
+
+After merging this stage, the operator can open **Actions ? Terraform plan ? Run
+workflow ? main**, review the `terraform-plan` environment request, then inspect
+the resulting allowlisted plan summary. Do not approve `terraform-deploy` until
+the scope, live scan findings and refreshed 12?24-hour London cost estimate fit
+the $20?30 total budget. Provision database roles/secrets and rehearse RDS restore,
+TLS and permissions before activating application writers. Preserve existing
+readings and the local volumes. No live AWS plan/apply or cloud migration was
+performed for this source-only stage.
+
+Offline verification for this source stage: **90 pytest checks passed** under
+Python 3.12, including release identity/digest/scan rejection, input tampering,
+saved-plan producer/consumer compatibility and teardown-preflight validation.
+Ruff lint/format, actionlint and offline Zizmor also passed; existing Zizmor
+suppressions were unchanged. These are source/fixture checks, not live AWS evidence.

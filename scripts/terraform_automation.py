@@ -16,12 +16,20 @@ import subprocess
 from terraform_checks import Checks, TERRAFORM
 from cloud_plan_policy import check as check_cloud_resource
 from cloud_teardown import assert_ready as assert_teardown_ready
+from deployment_inputs import (
+    load_document,
+    validate_document,
+    verify_plan_inputs,
+    verify_release_receipts,
+    verify_release_run,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "23faraaz/CanopyOps"
 REGION = "eu-west-2"
 BUCKET = "canopyops-demo-tfstate-23faraaz"
 STATE_KEY = "canopyops/demo/terraform.tfstate"
+DEPLOYMENT_FILE = Path("infra/deployment.json")
 PLAN_PREFIX = "canopyops/demo/plans/"
 MAX_PLAN_BYTES = 4 * 1024 * 1024
 PLAN_AGE = timedelta(hours=2)
@@ -187,7 +195,7 @@ def verify_metadata(meta, commit, mode, run_id, attempt, now=None, account=None)
     now = now or datetime.now(timezone.utc)
     key = f"{PLAN_PREFIX}{run_id}/{attempt}/{mode}.tfplan"
     required = {
-        "schema": 1,
+        "schema": 2,
         "commit": commit,
         "mode": mode,
         "root": "infra",
@@ -226,9 +234,37 @@ def verify_metadata(meta, commit, mode, run_id, attempt, now=None, account=None)
         "inputs_sha256",
         "backend_sha256",
         "account",
+        "deployment",
+        "teardown_preflight",
     }
     if set(meta) != keys or not isinstance(meta.get("review"), list):
         raise ValueError("Unexpected saved-plan metadata fields")
+    document = validate_document(meta["deployment"], meta.get("account", ""))
+    quiescence = meta["teardown_preflight"]
+    if mode == "destroy" and document["inputs"]["application"] is not None:
+        if not isinstance(quiescence, dict) or set(quiescence) != {
+            "services_stopped",
+            "generator_stopped",
+            "queues",
+            "limitation",
+        }:
+            raise ValueError("Application destroy metadata requires its teardown preflight")
+        if (
+            quiescence["services_stopped"] is not True
+            or quiescence["generator_stopped"] is not True
+        ):
+            raise ValueError("Application teardown was not quiescent")
+        expected_queues = {"canopyops-demo-readings", "canopyops-demo-readings-dlq"}
+        if (
+            not isinstance(quiescence["queues"], dict)
+            or set(quiescence["queues"]) != expected_queues
+            or not all(value in {"drained", "absent"} for value in quiescence["queues"].values())
+        ):
+            raise ValueError("Application teardown queue proof is incomplete")
+        if not isinstance(quiescence["limitation"], str) or len(quiescence["limitation"]) > 300:
+            raise ValueError("Unexpected teardown limitation metadata")
+    elif quiescence is not None:
+        raise ValueError("Unexpected teardown preflight on this operation")
     created = datetime.fromisoformat(meta["created_at"])
     if created.tzinfo is None or not timedelta(0) <= now - created <= PLAN_AGE:
         raise ValueError("Saved plan is future-dated or older than two hours; create a new plan")
@@ -354,6 +390,9 @@ class Workspace:
             command += ["--env", key]
         return self.runner.command([*command, TERRAFORM, *arguments], environment)
 
+    def configure(self, document):
+        write_json(self.source / "infra/reviewed-inputs.json", document["inputs"])
+
     def initialize(self):
         self.run("init", "-input=false", "-lockfile=readonly", "-no-color")
         if json.loads(self.run("version", "-json"))["terraform_version"] != "1.17.2":
@@ -366,7 +405,7 @@ def write_json(path, value):
 
 
 def show_review(meta):
-    # Values are filtered to the network-only allowlist and sensitivity masks.
+    # Resource settings are allowlisted; deployment metadata is validated and secret-free.
     print(json.dumps(meta, indent=2), flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -396,11 +435,46 @@ def validate_arguments(args):
 def source_hashes(meta):
     for name, file in [
         ("lock_sha256", ROOT / "infra/.terraform.lock.hcl"),
-        ("inputs_sha256", ROOT / "infra/terraform.tfvars.example"),
+        ("inputs_sha256", ROOT / DEPLOYMENT_FILE),
         ("backend_sha256", ROOT / "infra/backend.tf"),
     ]:
         if meta.get(name) != sha256(file):
             raise ValueError("Plan source/configuration hash changed")
+    document = load_document(ROOT / DEPLOYMENT_FILE, meta["account"])
+    if document != meta.get("deployment"):
+        raise ValueError("Reviewed deployment intent changed")
+
+
+def verify_published_release(runner, document):
+    release = document["release"]
+    if release is None:
+        return
+    run = runner.gh(f"repos/{REPOSITORY}/actions/runs/{release['run_id']}")
+    verify_release_run(run, release)
+    folder = runner.directory / "release"
+    if folder.is_symlink():
+        raise ValueError("Refusing release cache symlink")
+    folder.mkdir(exist_ok=True)
+    path = folder / "release-manifest.json"
+    if not path.exists():
+        runner.command(
+            [
+                "gh",
+                "run",
+                "download",
+                release["run_id"],
+                "--repo",
+                REPOSITORY,
+                "--name",
+                f"immutable-release-{release['run_id']}-{release['attempt']}",
+                "--dir",
+                str(folder),
+            ],
+            {**runner.environment, "GH_TOKEN": os.environ["GH_TOKEN"]},
+        )
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+        raise ValueError("Require the small immutable release manifest")
+    verify_release_receipts(json.loads(path.read_text()), document)
 
 
 def preflight(runner, args):
@@ -416,12 +490,18 @@ def preflight(runner, args):
             "--",
             "infra",
             "scripts/terraform_automation.py",
+            "scripts/deployment_inputs.py",
             "scripts/cloud_plan_policy.py",
             "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",
         ]
     )
     runner.current_main(args.commit)
+    runner.command(["git", "ls-files", "--error-unmatch", str(DEPLOYMENT_FILE)])
+    document = load_document(ROOT / DEPLOYMENT_FILE, args.account)
+    verify_published_release(runner, document)
+    if args.operation in {"plan", "destroy-plan"}:
+        show_review({"deployment": document, "inputs_sha256": sha256(ROOT / DEPLOYMENT_FILE)})
     if args.operation in {"deploy", "destroy"}:
         mode = "apply" if args.operation == "deploy" else "destroy"
         source_run = args.plan_run if mode == "apply" else args.run
@@ -457,8 +537,11 @@ def preflight(runner, args):
 
 
 def plan(runner, args):
+    document = load_document(ROOT / DEPLOYMENT_FILE, args.account)
+    verify_published_release(runner, document)
     runner.authenticate(args.account, "plan")
     workspace = Workspace(runner)
+    workspace.configure(document)
     workspace.initialize()
     mode = "destroy" if args.operation == "destroy-plan" else "apply"
     command = [
@@ -466,7 +549,7 @@ def plan(runner, args):
         "-input=false",
         "-no-color",
         "-lock-timeout=60s",
-        "-var-file=terraform.tfvars.example",
+        "-var-file=reviewed-inputs.json",
         "-out=/work/plan.bin",
     ]
     if mode == "destroy":
@@ -476,6 +559,7 @@ def plan(runner, args):
     if not 0 < binary.stat().st_size <= MAX_PLAN_BYTES:
         raise ValueError("Saved plan exceeds the bounded demo size")
     reviewed = json.loads(workspace.run("show", "-json", "/work/plan.bin"))
+    verify_plan_inputs(reviewed, document)
     rows = review_plan(reviewed, mode, targeted_destroy=mode == "destroy")
     quiescence = None
     if (
@@ -508,7 +592,7 @@ def plan(runner, args):
     }:
         raise ValueError("Saved plan requires encrypted versioned private storage")
     meta = {
-        "schema": 1,
+        "schema": 2,
         "commit": args.commit,
         "mode": mode,
         "root": "infra",
@@ -524,10 +608,12 @@ def plan(runner, args):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "review": rows,
         "teardown_preflight": quiescence,
+        "deployment": document,
         "lock_sha256": sha256(ROOT / "infra/.terraform.lock.hcl"),
-        "inputs_sha256": sha256(ROOT / "infra/terraform.tfvars.example"),
+        "inputs_sha256": sha256(ROOT / DEPLOYMENT_FILE),
         "backend_sha256": sha256(ROOT / "infra/backend.tf"),
     }
+    verify_metadata(meta, args.commit, mode, args.run, args.attempt, account=args.account)
     output = runner.directory / "artifact"
     output.mkdir()
     write_json(output / "metadata.json", meta)
@@ -540,6 +626,8 @@ def apply(runner, args):
     if runner.command(["git", "rev-parse", "HEAD"]).strip() != args.commit:
         raise ValueError("Checkout changed after preflight")
     source_hashes(meta)
+    document = load_document(ROOT / DEPLOYMENT_FILE, args.account)
+    verify_published_release(runner, document)
     runner.command(
         [
             "git",
@@ -549,6 +637,7 @@ def apply(runner, args):
             "--",
             "infra",
             "scripts/terraform_automation.py",
+            "scripts/deployment_inputs.py",
             "scripts/cloud_plan_policy.py",
             "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",
@@ -590,6 +679,7 @@ def apply(runner, args):
         raise ValueError("Saved plan checksum mismatch")
     workspace.initialize()
     reviewed = json.loads(workspace.run("show", "-json", "/work/plan.bin"))
+    verify_plan_inputs(reviewed, document)
     rows = review_plan(reviewed, mode, targeted_destroy=mode == "destroy")
     quiescence = None
     if (
@@ -608,6 +698,8 @@ def apply(runner, args):
         "state_key": STATE_KEY,
         "plan_sha256": meta["plan_sha256"],
         "plan_version": meta["version_id"],
+        "inputs_sha256": meta["inputs_sha256"],
+        "deployment": document,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "reviewed_changes": rows,
         "teardown_preflight": quiescence,

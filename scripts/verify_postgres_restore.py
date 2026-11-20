@@ -13,7 +13,7 @@ from pathlib import Path
 
 from verify_docker import ROOT
 from verify_recovery import decode
-from postgres_rehearsal import restore_images, verify_versions
+from postgres_rehearsal import restore_configuration, restore_images, verify_versions
 
 
 def main():
@@ -95,6 +95,7 @@ def main():
     source_network = next(iter(source_info["NetworkSettings"]["Networks"]))
     source_host = source_info["Name"].lstrip("/")
     image = "canopyops-restore:" + run_id
+    print("Building the disposable rehearsal image; this may take a few minutes...", flush=True)
     execute("docker", "build", "-q", "-t", image, ".")
     report.update(
         originals=originals,
@@ -239,12 +240,7 @@ def main():
         return execute(*compose, *args)
 
     def validate():
-        config = json.loads(dc("config", "--format", "json"))
-        if (
-            config["services"]["postgres"]["image"] != target_image
-            or config["services"]["restore-client"]["image"] != pg_image
-        ):
-            raise RuntimeError("Restore server/client image guard failed")
+        config = restore_configuration(dc, pg_image, target_image)
         for volume in config.get("volumes", {}).values():
             if (
                 volume.get("external")
@@ -269,7 +265,10 @@ def main():
 
     success = False
     try:
+        report["phase"] = "validating_target_configuration"
+        save()
         validate()
+        report["phase"] = "preparing_source_snapshot"
         save()
         print(
             "Taking a consistent online PostgreSQL snapshot; source writes continue...", flush=True
@@ -423,7 +422,8 @@ def main():
         report.update(status="failed", error_type=type(exc).__name__)
         save()
         raise RuntimeError(
-            "Backup/restore rehearsal failed; local diagnostics retained; no source writes issued"
+            f"Backup/restore rehearsal failed during {report.get('phase', 'preflight')} "
+            f"({type(exc).__name__}); diagnostics: {folder}; no source writes issued"
         ) from None
     finally:
         (folder / "release-snapshot").write_text("release\n")

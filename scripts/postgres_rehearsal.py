@@ -1,5 +1,6 @@
 """Pure image/version guards for a separate-database minor-version rehearsal."""
 
+import json
 import re
 
 IMAGE = re.compile(r"^postgres:([1-9][0-9]*)\.([0-9]+)-bookworm@sha256:[a-f0-9]{64}$")
@@ -37,3 +38,17 @@ def verify_versions(source_version, target_version_num, client, target):
         "target_older_minor": target_minor < source_minor,
         "limitation": "Local upstream PostgreSQL compatibility only; RDS behavior and patch equivalence remain unverified.",
     }
+
+
+def restore_configuration(compose, client, target):
+    """Render tools explicitly: Compose omits disabled profile services by default."""
+    config = json.loads(compose("--profile", "tools", "config", "--format", "json"))
+    services = config.get("services", {})
+    if not {"postgres", "restore-client"}.issubset(services):
+        raise ValueError("Restore configuration must include the postgres and tools-profile client")
+    if (
+        services["postgres"].get("image") != target
+        or services["restore-client"].get("image") != client
+    ):
+        raise ValueError("Restore server/client image guard failed")
+    return config

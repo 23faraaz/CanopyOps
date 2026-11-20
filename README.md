@@ -2166,9 +2166,18 @@ before cutover and recheck its available patches.
 [PostgreSQL version compatibility](https://www.postgresql.org/docs/17/upgrading.html),
 [pg_dump guidance](https://www.postgresql.org/docs/17/app-pgdump.html).
 
-Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eight passed
+Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eleven passed
 under Python 3.12, with changed-source formatting and lint checks. The candidate
 image was pulled anonymously and its binary version probed without host data
 mounts or network. No live-source rehearsal or migration success is claimed by this code.
 Application preparation remains `redis_version="7.1"`, `redis_user_ids=[]` and
 `activate_services=false`; workflow/input integration follows the rehearsal.
+
+The first candidate run exposed an early configuration bug: plain Compose config
+omitted the tools-profile restore client, so the new image guard raised KeyError
+before the source snapshot started. Validation now renders with `--profile tools`
+and reports a controlled configuration error if the service is absent. Eleven
+offline tests and a real Compose render of fictional services passed. Failure
+messages now include the safe phase, error type and evidence path, and image
+build progress is announced. This fixes the controller; it is not a passed
+real-data restore. Keep existing failed-run evidence and original volumes intact.

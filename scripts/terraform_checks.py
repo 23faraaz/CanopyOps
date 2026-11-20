@@ -1,7 +1,8 @@
 """AWS-credential-free Terraform checks in disposable source-only Docker workspaces.
 
 Requires WSL/Linux, Docker and Git. Never initializes the working checkout's backend.
-Only tracked Terraform sources, examples and locks are copied; no local input or state.
+Only tracked Terraform sources, locks and explicit public deployment metadata are copied.
+No tfvars/example, credential, environment or state files are copied.
 """
 
 import argparse
@@ -32,7 +33,8 @@ def allowed_source(name):
         and (
             path.suffix == ".tf"
             or path.name.endswith(".tftest.hcl")
-            or path.name in {".terraform.lock.hcl", ".tflint.hcl", "terraform.tfvars.example"}
+            or path.name in {".terraform.lock.hcl", ".tflint.hcl"}
+            or path == Path("infra/deployment.json")
         )
     )
 

@@ -15,17 +15,28 @@ ACCOUNT = "123456789012"
 NOW = datetime(2026, 11, 19, 16, tzinfo=timezone.utc)
 
 
+def deployment():
+    return {
+        "schema": 1,
+        "release": None,
+        "inputs": {
+            "project_name": "canopyops",
+            "environment": "demo",
+            "aws_region": "eu-west-2",
+            "vpc_cidr": "10.42.0.0/16",
+            "public_subnet_cidrs": ["10.42.0.0/24", "10.42.1.0/24"],
+            "private_app_subnet_cidrs": ["10.42.10.0/24", "10.42.11.0/24"],
+            "isolated_data_subnet_cidrs": ["10.42.20.0/24", "10.42.21.0/24"],
+            "availability_zones": ["eu-west-2a", "eu-west-2b"],
+            "application": None,
+        },
+    }
+
+
 def plan_value(actions=None):
     return {
         "complete": True,
-        "variables": {
-            key: {"value": value}
-            for key, value in {
-                "project_name": "canopyops",
-                "environment": "demo",
-                "aws_region": "eu-west-2",
-            }.items()
-        },
+        "variables": {key: {"value": value} for key, value in deployment()["inputs"].items()},
         "resource_changes": [
             {
                 "address": "module.network.aws_vpc.this",
@@ -44,7 +55,9 @@ def plan_value(actions=None):
 
 def metadata():
     return {
-        "schema": 1,
+        "schema": 2,
+        "deployment": deployment(),
+        "teardown_preflight": None,
         "commit": COMMIT,
         "mode": "apply",
         "root": "infra",
@@ -211,11 +224,11 @@ def source_fixture(tmp_path, monkeypatch, meta):
     (repo / "infra").mkdir(parents=True)
     for field, name in [
         ("lock_sha256", ".terraform.lock.hcl"),
-        ("inputs_sha256", "terraform.tfvars.example"),
+        ("inputs_sha256", "deployment.json"),
         ("backend_sha256", "backend.tf"),
     ]:
         path = repo / "infra" / name
-        path.write_text("public fixture")
+        path.write_text(json.dumps(deployment()) if name == "deployment.json" else "public fixture")
         meta[field] = automation.sha256(path)
     monkeypatch.setattr(automation, "ROOT", repo)
 
@@ -334,3 +347,112 @@ def test_command_failure_exposes_code_without_private_output(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="AccessDeniedException") as error:
         runner.command(["aws", "s3api", "head-object"])
     assert "private-fixture" not in str(error.value) + capsys.readouterr().out
+
+
+def test_plan_producer_and_consumer_share_the_metadata_contract(tmp_path, monkeypatch):
+    meta = metadata()
+    source_fixture(tmp_path, monkeypatch, meta)
+    directory = tmp_path / "job"
+    directory.mkdir()
+    calls = []
+
+    class FakeRunner:
+        def __init__(self):
+            self.directory = directory
+
+        def authenticate(self, account, purpose):
+            assert account == ACCOUNT and purpose == "plan"
+
+        def aws(self, *args):
+            calls.append(args)
+            assert args[:2] == ("s3api", "put-object")
+            return {"ServerSideEncryption": "AES256", "VersionId": "fixture-version"}
+
+    class FakeWorkspace:
+        def __init__(self, runner):
+            self.path = directory / "terraform"
+            self.path.mkdir()
+
+        def configure(self, document):
+            assert document == deployment()
+
+        def initialize(self):
+            pass
+
+        def run(self, *args):
+            calls.append(args)
+            if args[0] == "plan":
+                (self.path / "plan.bin").write_bytes(b"synthetic-plan")
+                assert "-var-file=reviewed-inputs.json" in args
+            if args[0] == "show":
+                return json.dumps(plan_value())
+            return ""
+
+    monkeypatch.setattr(automation, "Workspace", FakeWorkspace)
+    monkeypatch.setattr(automation, "show_review", lambda value: None)
+    args = arguments("plan")
+    automation.plan(FakeRunner(), args)
+    result = json.loads((directory / "artifact/metadata.json").read_text())
+    automation.verify_metadata(result, COMMIT, "apply", args.run, args.attempt, account=ACCOUNT)
+    assert result["deployment"] == deployment()
+    assert result["teardown_preflight"] is None
+
+
+def test_saved_plan_variable_tampering_is_rejected():
+    value = plan_value()
+    value["variables"]["vpc_cidr"]["value"] = "10.99.0.0/16"
+    with pytest.raises(ValueError, match="inputs differ"):
+        automation.verify_plan_inputs(value, deployment())
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        None,
+        {"services_stopped": True},
+        {
+            "services_stopped": False,
+            "generator_stopped": True,
+            "queues": {
+                "canopyops-demo-readings": "drained",
+                "canopyops-demo-readings-dlq": "drained",
+            },
+            "limitation": "fixture",
+        },
+    ],
+)
+def test_application_destroy_metadata_requires_complete_quiescence(proof):
+    from test_deployment_inputs import document
+
+    meta = metadata()
+    meta.update(
+        mode="destroy",
+        key=automation.PLAN_PREFIX + "123/1/destroy.tfplan",
+        deployment=document(),
+        account="667819981432",
+        teardown_preflight=proof,
+    )
+    with pytest.raises(ValueError, match="teardown|quiescent"):
+        automation.verify_metadata(meta, COMMIT, "destroy", "123", "1", now=NOW)
+
+
+def test_application_destroy_metadata_accepts_the_full_preflight_contract():
+    from test_deployment_inputs import document
+
+    meta = metadata()
+    meta.update(
+        mode="destroy",
+        key=automation.PLAN_PREFIX + "123/1/destroy.tfplan",
+        deployment=document(),
+        account="667819981432",
+        teardown_preflight={
+            "services_stopped": True,
+            "generator_stopped": True,
+            "queues": {
+                "canopyops-demo-readings": "drained",
+                "canopyops-demo-readings-dlq": "absent",
+            },
+            "limitation": "Synthetic proof; no live AWS calls",
+        },
+    )
+    automation.verify_metadata(meta, COMMIT, "destroy", "123", "1", now=NOW)

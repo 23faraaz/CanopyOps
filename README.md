@@ -2265,3 +2265,101 @@ Python 3.12, including release identity/digest/scan rejection, input tampering,
 saved-plan producer/consumer compatibility and teardown-preflight validation.
 Ruff lint/format, actionlint and offline Zizmor also passed; existing Zizmor
 suppressions were unchanged. These are source/fixture checks, not live AWS evidence.
+
+
+### Pre-deployment security and cost review (20 November 2026)
+
+The operator-supplied schema-2 summary for main `76ff113`, plan run
+`44812708020/1`, lists **131 creates, zero updates and zero deletions**. All three
+services have desired count zero; writes are fenced; no Redis cache, NAT gateway
+or replacement ACM certificate is proposed. This review did not read state,
+private variables, raw saved plans, credential stores or live AWS resources.
+
+The public Terraform templates were inspected, including root wiring, runtime
+boundary, ECS foundation, private connectivity, security groups, database, queue,
+ingress and service definitions. Important findings and limits:
+
+| Area | Source-reviewed behavior | Remaining evidence |
+| --- | --- | --- |
+| Role trust and permissions | Eight task/execution roles trust ECS tasks with source-account and regional source-ARN conditions and the runtime boundary. Startup roles pull scoped ECR repositories, write their own log streams and fetch only assigned runtime secret ARNs. Generator and worker have distinct queue actions; generator alone has prefix-scoped outbox access. | Computed final IAM documents remain unknown until their dependencies resolve. Source review is not an IAM simulation or runtime denial test. |
+| Private connectivity | Five interface endpoints in both app AZs, private DNS, role/resource-scoped policies. S3 gateway access is limited to regional ECR image layers and the generator outbox prefix. | Verify actual endpoint policies, DNS and image pull after provisioning. ECR authorization-token and presigned layer-download wildcard exceptions are scoped by their actions/resources as shown in source. |
+| Traffic | Separate paired ingress/egress rules allow ALB ? API/analytics, service ? PostgreSQL, analytics ? Redis and task ? endpoints. No task public IPs; metrics port 9100 has no allowed ingress. | Verify actual group associations and exposure after provisioning. No live Prometheus scrape is provided by this plan. |
+| TLS | HTTPS listener uses the retained certificate and TLS 1.2/1.3 policy; HTTP redirects. RDS requires SSL and tasks request `verify-full`; Redis requires TLS when provisioned. | ALB ? task traffic currently uses HTTP on security-group-restricted paths: this is not end-to-end TLS. RDS CA/hostname and Redis authentication still need live checks. IAM database authentication is enabled on RDS, but the application uses separate SQL users with Secrets Manager injection. |
+| Data and logs | RDS is private/encrypted Multi-AZ, 20 GiB gp3, seven-day backups, autoscaling disabled, deletion protection and final snapshot required. Logs retain seven days; ALB log versions expire after seven days asynchronously. Outbox is retained/versioned with create-only writes and no automatic reading deletion. | Preserve existing local readings. Provision credentials/schema and rehearse RDS restore before activation; retained backups/outbox need explicit later retention and cost review. |
+| Containers | Fargate x86_64, non-root, read-only root, dropped capabilities, digest-pinned images, no ECS Exec. API/worker/analytics each 0.5 vCPU / 1 GiB; generator 0.25 vCPU / 0.5 GiB, finite/manual only. | Container definitions are computed in this plan. The summary does not reveal environment values, raw container JSON, policies or credentials. Verify deployed configuration and graceful shutdown later. |
+
+The public review now includes allowlisted database class/storage/backup settings,
+log retention/encryption, endpoint subnet/security-group IDs, paired group IDs,
+ECS private networking and circuit-breaker settings, ALB TLS/redirect/metrics-block
+settings, and S3 encryption/versioning/expiry. Unknown IDs remain explicitly marked;
+configuration expression references explain their source without printing literal
+configuration values. Only actual policy-bearing resource types flag computed
+security documents; provider-computed legacy attributes on buckets/secrets no longer
+create misleading policy flags. Known nested fields still honor sensitivity masks.
+Unknown policy/container documents remain unresolved and require source/live review.
+
+Offline verification: **119 tests passed, plus 14 subtests**, under Python 3.12;
+Ruff lint/format passed. Tests cover nested secret/response-body exclusion, sensitive
+masks, unknown fields, source references, sizing, TLS, and existing plan guards.
+No infrastructure or permissions were changed by this summary improvement. Generate
+a fresh protected plan after merge; old review metadata is not interchangeable.
+
+#### London rehearsal estimate
+
+Anonymous AWS regional price-list catalogs were fetched on 20 November 2026;
+no AWS credentials, credits or Free Tier allowances were used. Source defaults
+are `db.t4g.micro`, 20 GiB gp3 Multi-AZ and five interface endpoints across two AZs.
+The following is a model of incremental costs, not an account bill or a hard cap:
+
+| Item | Quantity / rate | Modeled USD/hour |
+| --- | --- | ---: |
+| Interface endpoints | 5 ? 2 AZs ? $0.011/endpoint-AZ-hour | 0.11000 |
+| Application Load Balancer | One at $0.02646/hour | 0.02646 |
+| ALB capacity allowance | One consumed LCU at $0.0084/LCU-hour; usage can exceed this | 0.00840 |
+| ALB public IPv4 | Two addresses assumed ? $0.005/hour; scaling can increase count | 0.01000 |
+| RDS PostgreSQL | db.t4g.micro Multi-AZ rate, already includes standby | 0.03600 |
+| RDS gp3 | 20 GiB ? $0.266/GB-month, already Multi-AZ, normalized over 730 hours | 0.00729 |
+| WAF allowance | One ACL plus two rules, $7/month normalized | 0.00959 |
+| Two customer-managed KMS keys | $2/month normalized, before requests/rotated-key storage | 0.00274 |
+| Secrets allowance | Up to five stored secrets including RDS admin, $2/month normalized | 0.00274 |
+| **Initial stopped-task model** | **No running tasks or Redis** | **0.21322** |
+| Later three running services | 3 ? (0.5 ? $0.04656/vCPU-hour + 1 ? $0.00511/GiB-hour) | +0.08517 |
+| Later Redis primary | One cache.t4g.micro Redis node | +0.01800 |
+
+| Duration | Initial tasks stopped / Redis deferred | Later three tasks + one Redis |
+| --- | ---: | ---: |
+| 12 hours | $2.56 | $3.80 |
+| 24 hours | $5.12 | $7.59 |
+| 7 days | $35.82 | $53.15 |
+
+Use a **12-hour target, 24-hour planned maximum**, with a separate teardown review
+scheduled while the operator is available. These estimates exclude tax, existing
+account spend, hosted-zone charges, requests, data processing/transfer, log ingestion,
+ECR/S3 storage and scans, excess RDS CPU credits, generator runs, deployment overlap,
+additional restore/failover exercises and retained snapshots/backups. Monthly rates
+are normalized for comparison; actual billing granularity varies. Reserve budget
+for these items; the $20?30 target is not enforced by the model or by stopping tasks.
+Do not assume existing credits cover any service. Check current account spend and
+billing alerts yourself before approving the rehearsal.
+
+Retained foundation resources, state/ECR/DNS and final snapshots can continue to
+cost money after application teardown. Preserve required recovery data and review
+its later cleanup separately; do not disable snapshot/outbox safeguards to make a
+teardown appear free. A week-long deployment exceeds the project budget even in
+the stopped-task model.
+
+Sources: [London VPC catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonVPC/current/eu-west-2/index.json)
+(publication 19 November), [London ALB catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSELB/current/eu-west-2/index.json)
+(19 November), [London RDS catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/current/eu-west-2/index.json)
+(19 November), [London Fargate catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonECS/current/eu-west-2/index.json)
+(11 November), [London Redis catalog](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonElastiCache/current/eu-west-2/index.json)
+(18 November), [WAF pricing](https://aws.amazon.com/waf/pricing/),
+[KMS pricing](https://aws.amazon.com/kms/pricing/),
+[Secrets Manager pricing](https://aws.amazon.com/secrets-manager/pricing/).
+
+After merge, run **Actions ? Terraform plan ? main**, approve only `terraform-plan`,
+and review the expanded sanitized summary. Recheck current image scans and plan
+age before any deployment review. Provisioning is a separate approved step; this
+review does not authorize activation, migration, failover or deletion. When live
+monitoring is exercised later, capture Prometheus/Grafana screenshots of normal,
+stale-reading, stopped-processing and recovery states as portfolio evidence.

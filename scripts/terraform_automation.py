@@ -16,6 +16,12 @@ import subprocess
 from terraform_checks import Checks, TERRAFORM
 from cloud_plan_policy import check as check_cloud_resource
 from cloud_teardown import assert_ready as assert_teardown_ready
+from plan_review import (
+    fields as review_fields,
+    select as select_review,
+    references as review_references,
+    DOCUMENTS,
+)
 from deployment_inputs import (
     load_document,
     validate_document,
@@ -119,6 +125,7 @@ def review_plan(plan, mode, *, targeted_destroy=False):
         else:
             application = plan.get("variables", {}).get("application", {}).get("value")
             fields = check_cloud_resource(resource, application, mode)
+        fields = review_fields(kind, fields)
         allowed = (
             [["no-op"], ["create"], ["update"]] if mode == "apply" else [["no-op"], ["delete"]]
         )
@@ -137,19 +144,22 @@ def review_plan(plan, mode, *, targeted_destroy=False):
             "address": address,
             "actions": actions,
             "computed_after": [
-                key for key in fields if isinstance(unknown, dict) and unknown.get(key) is True
+                key for key in fields if isinstance(unknown, dict) and unknown.get(key)
             ],
         }
         if not address.startswith("module.network."):
             row["computed_security_documents"] = [
                 key
-                for key in ["policy", "container_definitions", "assume_role_policy"]
+                for key in DOCUMENTS.get(kind, [])
                 if isinstance(unknown, dict) and unknown.get(key) is True
             ]
+        row["source_references"] = review_references(
+            plan, address, [*fields, *DOCUMENTS.get(kind, [])]
+        )
         for side in ["before", "after"]:
             values = change.get(side) or {}
             mask = change.get(side + "_sensitive") or {}
-            selected = {key: values[key] for key in fields if key in values}
+            selected = select_review(values, kind, fields)
             tags = values.get("tags_all", values.get("tags", {})) or {}
             selected["ownership_tags"] = {
                 key: tags[key]
@@ -491,6 +501,7 @@ def preflight(runner, args):
             "infra",
             "scripts/terraform_automation.py",
             "scripts/deployment_inputs.py",
+            "scripts/plan_review.py",
             "scripts/cloud_plan_policy.py",
             "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",
@@ -638,6 +649,7 @@ def apply(runner, args):
             "infra",
             "scripts/terraform_automation.py",
             "scripts/deployment_inputs.py",
+            "scripts/plan_review.py",
             "scripts/cloud_plan_policy.py",
             "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",

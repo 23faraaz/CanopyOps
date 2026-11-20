@@ -1,7 +1,8 @@
-"""Pure image/version guards for a separate-database minor-version rehearsal."""
+"""Image/version guards and output boundaries for an isolated restore rehearsal."""
 
 import json
 import re
+import subprocess
 
 IMAGE = re.compile(r"^postgres:([1-9][0-9]*)\.([0-9]+)-bookworm@sha256:[a-f0-9]{64}$")
 
@@ -52,3 +53,16 @@ def restore_configuration(compose, client, target):
     ):
         raise ValueError("Restore server/client image guard failed")
     return config
+
+
+def capture_restore_command(arguments, directory):
+    """Keep machine-readable stdout separate from Compose warnings on stderr."""
+    return subprocess.run(
+        arguments,
+        cwd=directory,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )

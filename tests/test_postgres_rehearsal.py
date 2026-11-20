@@ -3,10 +3,16 @@
 from pathlib import Path
 import json
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from postgres_rehearsal import restore_configuration, restore_images, verify_versions  # noqa: E402
+from postgres_rehearsal import (
+    capture_restore_command,
+    restore_configuration,
+    restore_images,
+    verify_versions,
+)  # noqa: E402
 
 CLIENT = "postgres:17.12-bookworm@sha256:" + "a" * 64
 TARGET = "postgres:17.11-bookworm@sha256:" + "b" * 64
@@ -86,6 +92,41 @@ class RestoreConfigurationGuards(unittest.TestCase):
 
                 with self.assertRaisesRegex(ValueError, "image guard"):
                     restore_configuration(compose, CLIENT, TARGET)
+
+
+class RestoreCommandOutput(unittest.TestCase):
+    def command(self, body):
+        with tempfile.TemporaryDirectory(prefix="canopy-output-contract-") as directory:
+            return capture_restore_command([sys.executable, "-c", body], directory)
+
+    def test_warning_does_not_corrupt_numeric_version(self):
+        result = self.command(
+            "import sys; sys.stderr.write('fictional Compose warning\\n'); print('170011')"
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("warning", result.stderr)
+        checked = verify_versions("17.12", result.stdout.strip(), CLIENT, TARGET)
+        self.assertEqual(checked["target_server_version_num"], 170011)
+
+    def test_warning_does_not_corrupt_json(self):
+        result = self.command(
+            "import sys; sys.stderr.write('fictional Compose warning\\n'); print('{\"ready\":true}')"
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout), {"ready": True})
+        self.assertNotIn("warning", result.stdout)
+
+    def test_failed_command_keeps_separate_diagnostics(self):
+        result = self.command(
+            "import sys; print('fictional output'); sys.stderr.write('fictional failure'); sys.exit(7)"
+        )
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("output", result.stdout)
+        self.assertIn("failure", result.stderr)
+
+    def test_non_numeric_stdout_is_still_rejected(self):
+        with self.assertRaises(ValueError):
+            verify_versions("17.12", "unexpected output\n170011", CLIENT, TARGET)
 
 
 if __name__ == "__main__":

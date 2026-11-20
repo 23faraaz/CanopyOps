@@ -2166,7 +2166,7 @@ before cutover and recheck its available patches.
 [PostgreSQL version compatibility](https://www.postgresql.org/docs/17/upgrading.html),
 [pg_dump guidance](https://www.postgresql.org/docs/17/app-pgdump.html).
 
-Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eleven passed
+Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All fifteen passed
 under Python 3.12, with changed-source formatting and lint checks. The candidate
 image was pulled anonymously and its binary version probed without host data
 mounts or network. No live-source rehearsal or migration success is claimed by this code.
@@ -2181,3 +2181,15 @@ offline tests and a real Compose render of fictional services passed. Failure
 messages now include the safe phase, error type and evidence path, and image
 build progress is announced. This fixes the controller; it is not a passed
 real-data restore. Keep existing failed-run evidence and original volumes intact.
+
+The next failed run completed its source backup and target preparation/query,
+but stopped before recording version verification. Successful command output
+had been merged with stderr, allowing Compose warnings to corrupt numeric/JSON
+parsing. The controller now captures streams separately, parses stdout only,
+records whether stderr was present without exposing its value, and retains both
+streams privately on command failure. Fifteen offline tests include warning/noise
+separation and rejection of genuinely invalid version output. No raw evidence or
+credentials were inspected by the agent; confirmation against the real dataset
+still requires the operator rerun. New target-start/preparation/version/restore/
+verification phases make subsequent failures more precise. A successful
+`pg_restore --version` probe is not evidence that the data restore completed.

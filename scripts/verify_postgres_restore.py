@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,7 +12,12 @@ from pathlib import Path
 
 from verify_docker import ROOT
 from verify_recovery import decode
-from postgres_rehearsal import restore_configuration, restore_images, verify_versions
+from postgres_rehearsal import (
+    capture_restore_command,
+    restore_configuration,
+    restore_images,
+    verify_versions,
+)
 
 
 def main():
@@ -47,25 +51,18 @@ def main():
         (folder / "summary.json").write_text(json.dumps(report, indent=2))
 
     def execute(*args):
-        result = subprocess.run(
-            args,
-            cwd=ROOT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        result = capture_restore_command(args, ROOT)
         commands.append(
             {
                 "command": list(args),
                 "exit_code": result.returncode,
+                "stderr_present": bool(result.stderr),
                 "utc": datetime.now(timezone.utc).isoformat(),
             }
         )
         (folder / "commands.json").write_text(json.dumps(commands, indent=2))
         if result.returncode:
-            (folder / "failure.log").write_text(result.stdout, encoding="utf-8")
+            (folder / "failure.log").write_text(result.stdout + result.stderr, encoding="utf-8")
             raise RuntimeError("Command failed; local diagnostics retained")
         return result.stdout
 
@@ -314,12 +311,16 @@ def main():
         print(
             "Restoring into a new guarded database on an isolated PostgreSQL volume...", flush=True
         )
+        report["phase"] = "starting_isolated_target"
+        save()
         dc("up", "-d", "--no-build", "--wait", "--wait-timeout", "120", "postgres")
         identifier = dc("ps", "-q", "postgres").strip()
         target_info = json.loads(execute("docker", "inspect", identifier))[0]
         assert target_info["Config"]["Labels"]["com.docker.compose.project"] == project
         assert identifier != originals["postgres"]["id"]
         assert not target_info["HostConfig"]["PortBindings"]
+        report["phase"] = "preparing_target_database"
+        save()
         report["target_prepare"] = decode(
             dc(
                 "run",
@@ -345,6 +346,8 @@ def main():
             "SELECT run_id FROM restore_control.guard",
         )
         assert run_id in guard
+        report["phase"] = "checking_target_version"
+        save()
         target_version_num = dc(
             "run",
             "--rm",
@@ -359,6 +362,8 @@ def main():
         report["version_rehearsal"] = verify_versions(
             report["source_server_version"], target_version_num, pg_image, target_image
         )
+        report["phase"] = "restoring_target_database"
+        save()
         started = time.monotonic()
         dc(
             "run",
@@ -375,6 +380,8 @@ def main():
             "/evidence/canopy.dump",
         )
         report["restore_command_seconds"] = round(time.monotonic() - started, 3)
+        report["phase"] = "verifying_restored_data"
+        save()
         report["restored_manifest"] = actor("verify-target")
         assert report["restored_manifest"] == report["source_snapshot"]
         dc("run", "--rm", "--no-deps", "-T", "migration", "python", "-m", "canopy.migrate")

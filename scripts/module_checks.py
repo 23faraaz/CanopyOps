@@ -18,6 +18,8 @@ from terraform_checks import TERRAFORM, TFLINT, TRIVY
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
+    "acm",
+    "dns-zone",
     "queue",
     "database",
     "cache",

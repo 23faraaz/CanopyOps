@@ -39,7 +39,7 @@ variables {
 run "dns_validated_https_and_private_metrics" {
   command = plan
   assert {
-    condition     = aws_acm_certificate.this.validation_method == "DNS" && length(aws_route53_record.validation) == 2 && aws_lb_listener.https.protocol == "HTTPS" && one(aws_lb_listener.http.default_action).type == "redirect" && one(one(aws_lb_listener.http.default_action).redirect).protocol == "HTTPS" && aws_lb_listener.https.ssl_policy == "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    condition     = aws_acm_certificate.this[0].validation_method == "DNS" && length(aws_route53_record.validation) == 2 && aws_lb_listener.https.protocol == "HTTPS" && one(aws_lb_listener.http.default_action).type == "redirect" && one(one(aws_lb_listener.http.default_action).redirect).protocol == "HTTPS" && aws_lb_listener.https.ssl_policy == "ELBSecurityPolicy-TLS13-1-2-2021-06"
     error_message = "Create and DNS-validate ACM before serving HTTPS."
   }
   assert {
@@ -60,4 +60,20 @@ run "reject_unbounded_waf_rate" {
   command = plan
   variables { rate_limit = 100001 }
   expect_failures = [var.rate_limit]
+}
+
+run "reuse_bootstrap_certificate_without_duplicate_records" {
+  command = plan
+  variables {
+    certificate_arn = "arn:aws:acm:eu-west-2:123456789012:certificate/11111111-1111-1111-1111-111111111111"
+  }
+  assert {
+    condition     = length(aws_acm_certificate.this) == 0 && length(aws_acm_certificate_validation.this) == 0 && length(aws_route53_record.validation) == 0 && aws_lb_listener.https.certificate_arn == var.certificate_arn
+    error_message = "Reuse the validated bootstrap certificate without competing DNS ownership."
+  }
+}
+run "reject_wrong_region_certificate" {
+  command = plan
+  variables { certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-1111-1111-1111-111111111111" }
+  expect_failures = [var.certificate_arn]
 }

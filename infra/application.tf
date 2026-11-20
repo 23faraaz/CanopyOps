@@ -65,6 +65,7 @@ module "ingress" {
   vpc_id                 = module.network.vpc_id
   domain_name            = each.value.domain_name
   hosted_zone_id         = each.value.hosted_zone_id
+  certificate_arn        = each.value.certificate_arn
   access_log_bucket_name = module.foundation[each.key].alb_log_bucket_name
   log_kms_key_arn        = module.foundation[each.key].log_kms_key_arn
   tags                   = local.application_tags

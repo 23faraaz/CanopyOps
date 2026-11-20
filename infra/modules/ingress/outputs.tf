@@ -8,7 +8,7 @@ output "target_group_arns" {
 }
 output "certificate_arn" {
   description = "Terraform-created and DNS-validated regional ACM certificate"
-  value       = aws_acm_certificate_validation.this.certificate_arn
+  value       = var.certificate_arn != null ? var.certificate_arn : aws_acm_certificate_validation.this[0].certificate_arn
 }
 output "urls" {
   description = "HTTPS hostnames; DNS/certificate validation and healthy targets still require live verification"

@@ -1853,9 +1853,10 @@ retain the separate IAM/plan-guard review before root wiring and deployment.
 The optional `application` input wires the modules in `infra/application.tf`.
 Its default is null; `activate_services=false` prepares services with zero tasks.
 Existing readings must be migrated before activation. No AWS changes were applied
-by this milestone. Route 53 and ACM are the chosen DNS/HTTPS services, but no domain
-is owned yet. An owned hostname and authoritative zone are required; Terraform
-requests the certificate and creates its DNS validation records. No purchase is automated.
+by this milestone. Route 53 and ACM are the chosen DNS/HTTPS services. The existing Cloudflare domain
+`faraazmo.co.uk` supplies the delegated `canopyops` subdomain described below.
+Terraform requests the certificate and creates validation records after delegation.
+No purchase is automated.
 
 Implemented components:
 
@@ -1992,3 +1993,91 @@ foundation deletion is rejected. Retained outbox/keys, logs, secret metadata,
 cluster/roles, revisions and snapshots need a separate cleanup/cost review.
 `prevent_destroy` is a Terraform safeguard, not protection against direct AWS
 operations. Complete application teardown and live recovery remain untested.
+
+### Delegating the CanopyOps subdomain
+
+The domain `faraazmo.co.uk` is registered at Cloudflare. Bootstrap's opt-in
+`dns-zone` module creates only the public `canopyops.faraazmo.co.uk` child zone;
+it does not modify the parent domain or deploy the application. Creation defaults
+to false, forced record deletion is disabled and Terraform destruction is blocked.
+The persistent zone remains outside demo teardown. Review ongoing Route 53 charges
+($0.50/zone-month for the first 25 zones, plus applicable queries).
+
+Run in your authenticated WSL session after reviewing the merged source:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap init -input=false
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan \
+  -var='create_application_dns_zone=true' -out=application-dns.tfplan
+# Only after confirming the plan adds the intended zone and has no unrelated changes:
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap apply application-dns.tfplan
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -json application_zone_name_servers
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -raw application_zone_id
+```
+
+Persist the opt-in in your private bootstrap inputs before later plans; otherwise
+Terraform proposes removal, blocked by `prevent_destroy`. These commands were not
+run by the agent. Existing role permissions and account-plan eligibility remain
+unverified; AccessDenied is not a reason to use root or administrator bypasses.
+
+In Cloudflare DNS, add four NS records named `canopyops`, one per returned AWS
+nameserver. Do not enter IPv4 addresses or change the root domain's nameservers.
+Check delegation with `dig NS canopyops.faraazmo.co.uk`. Once delegation resolves,
+use this zone ID for Terraform-managed ACM validation and later ALB alias records.
+No ACM certificate, application record or Cloudflare change is created by this step.
+
+### Certificate-only bootstrap step
+
+After `dig NS canopyops.faraazmo.co.uk +short` returns the delegated AWS
+nameservers, enable `create_application_certificate` alongside the existing DNS
+zone opt-in. Bootstrap requests one London ACM public certificate covering
+`canopyops.faraazmo.co.uk` and `analytics.canopyops.faraazmo.co.uk`, writes two
+validation CNAMEs in the child zone and waits up to 15 minutes for issuance. It
+creates no ALB, application tasks or application A records. The module relies on
+the bootstrap AWS provider region; validation rejects enabling it outside London.
+
+Run in the operator's authenticated WSL session; these commands were not run by
+the agent:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap init -input=false
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan \
+  -var='create_application_dns_zone=true' \
+  -var='create_application_certificate=true' -out=application-certificate.tfplan
+```
+
+With the zone already applied, expect four additions: one certificate, two DNS
+validation records and Terraform's certificate-validation waiter. There must be
+no unrelated changes or deletions. Review the plan before applying it:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap apply application-certificate.tfplan
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -raw application_certificate_arn
+```
+
+Keep both opt-ins in private bootstrap inputs for subsequent operations. Leave
+validation CNAMEs in place for renewal; renewal eligibility also requires the
+certificate to be in use by an integrated service. An issued but unused certificate
+does not make the website reachable or prove a functioning HTTPS listener.
+If validation times out, check parent delegation, CNAME resolution and inherited
+CAA restrictions before retrying; do not disable validation or overwrite records
+owned by another stack. AWS authentication, permissions and issuance remain
+operator-verified steps.
+
+For the later application plan, set `application.certificate_arn` to the validated
+bootstrap output. The ingress module then creates no certificate or validation
+records of its own. Null retains its existing managed-certificate behavior, with
+address moves preserving the old uncounted resources. Do not switch a previously
+deployed managed certificate to external ownership without a separately reviewed
+migration plan; this change prepares the not-yet-deployed application.
+[AWS DNS validation](https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html),
+[renewal eligibility](https://docs.aws.amazon.com/acm/latest/userguide/check-certificate-renewal-status.html).
+
+Repeat offline contracts with `python3 scripts/module_checks.py --module acm`
+and `python3 scripts/module_checks.py --module ingress`. These use fictional DNS
+values and mock providers; they do not issue certificates or authenticate to AWS.
+
+Certificate-stage local verification: ACM three, ingress five and root three mock
+contracts passed, with formatting, validation, lint and strict security checks.
+Copied bootstrap source initialized and validated with its backend disabled.
+Live ACM issuance has not been run or claimed.

@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "release": {
+    "commit": "74155727c75bbfb05d65d8b9e6b7035db120c2d9",
+    "run_id": "44744564031",
+    "attempt": "1"
+  },
+  "inputs": {
+    "project_name": "canopyops",
+    "environment": "demo",
+    "aws_region": "eu-west-2",
+    "vpc_cidr": "10.42.0.0/16",
+    "public_subnet_cidrs": [
+      "10.42.0.0/24",
+      "10.42.1.0/24"
+    ],
+    "private_app_subnet_cidrs": [
+      "10.42.10.0/24",
+      "10.42.11.0/24"
+    ],
+    "isolated_data_subnet_cidrs": [
+      "10.42.20.0/24",
+      "10.42.21.0/24"
+    ],
+    "availability_zones": [
+      "eu-west-2a",
+      "eu-west-2b"
+    ],
+    "application": {
+      "permissions_boundary_arn": "arn:aws:iam::667819981432:policy/canopyops-demo-runtime-boundary",
+      "domain_name": "canopyops.faraazmo.co.uk",
+      "hosted_zone_id": "Z04944632GJ89SE2C3524",
+      "certificate_arn": "arn:aws:acm:eu-west-2:667819981432:certificate/35677313-3204-42b8-9f18-079c6f0c9dc1",
+      "postgres_version": "17.11",
+      "redis_version": "7.1",
+      "final_snapshot_identifier": "canopyops-demo-final-rehearsal-20261120",
+      "redis_user_ids": [],
+      "repository_arns": {
+        "api": "arn:aws:ecr:eu-west-2:667819981432:repository/canopyops-demo/api",
+        "worker": "arn:aws:ecr:eu-west-2:667819981432:repository/canopyops-demo/worker",
+        "analytics": "arn:aws:ecr:eu-west-2:667819981432:repository/canopyops-demo/analytics"
+      },
+      "image_uris": {
+        "api": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/api@sha256:2b1cfd893f233267b2f39b2b5376020a562ad61044fd26fb5c10c7d004b6fe48",
+        "worker": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/worker@sha256:d2f0472a3b65e00291ff6c04e19c9119985c7e422bb80a38e13bd29a5af5d11c",
+        "analytics": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/analytics@sha256:ed1a559228a6e4bb35a413cec340188c703b7c9f900b78de273d3a1f9b1e30e3"
+      },
+      "activate_services": false,
+      "pause_ingestion": true,
+      "teardown_prepared": false
+    }
+  }
+}

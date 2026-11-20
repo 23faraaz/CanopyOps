@@ -1853,9 +1853,10 @@ retain the separate IAM/plan-guard review before root wiring and deployment.
 The optional `application` input wires the modules in `infra/application.tf`.
 Its default is null; `activate_services=false` prepares services with zero tasks.
 Existing readings must be migrated before activation. No AWS changes were applied
-by this milestone. Route 53 and ACM are the chosen DNS/HTTPS services, but no domain
-is owned yet. An owned hostname and authoritative zone are required; Terraform
-requests the certificate and creates its DNS validation records. No purchase is automated.
+by this milestone. Route 53 and ACM are the chosen DNS/HTTPS services. The existing Cloudflare domain
+`faraazmo.co.uk` supplies the delegated `canopyops` subdomain described below.
+Terraform requests the certificate and creates validation records after delegation.
+No purchase is automated.
 
 Implemented components:
 
@@ -1992,3 +1993,35 @@ foundation deletion is rejected. Retained outbox/keys, logs, secret metadata,
 cluster/roles, revisions and snapshots need a separate cleanup/cost review.
 `prevent_destroy` is a Terraform safeguard, not protection against direct AWS
 operations. Complete application teardown and live recovery remain untested.
+
+### Delegating the CanopyOps subdomain
+
+The domain `faraazmo.co.uk` is registered at Cloudflare. Bootstrap's opt-in
+`dns-zone` module creates only the public `canopyops.faraazmo.co.uk` child zone;
+it does not modify the parent domain or deploy the application. Creation defaults
+to false, forced record deletion is disabled and Terraform destruction is blocked.
+The persistent zone remains outside demo teardown. Review ongoing Route 53 charges
+($0.50/zone-month for the first 25 zones, plus applicable queries).
+
+Run in your authenticated WSL session after reviewing the merged source:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap init -input=false
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan \
+  -var='create_application_dns_zone=true' -out=application-dns.tfplan
+# Only after confirming the plan adds the intended zone and has no unrelated changes:
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap apply application-dns.tfplan
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -json application_zone_name_servers
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -raw application_zone_id
+```
+
+Persist the opt-in in your private bootstrap inputs before later plans; otherwise
+Terraform proposes removal, blocked by `prevent_destroy`. These commands were not
+run by the agent. Existing role permissions and account-plan eligibility remain
+unverified; AccessDenied is not a reason to use root or administrator bypasses.
+
+In Cloudflare DNS, add four NS records named `canopyops`, one per returned AWS
+nameserver. Do not enter IPv4 addresses or change the root domain's nameservers.
+Check delegation with `dig NS canopyops.faraazmo.co.uk`. Once delegation resolves,
+use this zone ID for Terraform-managed ACM validation and later ALB alias records.
+No ACM certificate, application record or Cloudflare change is created by this step.

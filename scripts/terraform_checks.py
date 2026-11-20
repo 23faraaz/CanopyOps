@@ -85,6 +85,7 @@ class Checks:
                     "infra/bootstrap/",
                     "infra/modules/runtime-boundary/",
                     "infra/modules/deployment-access/",
+                    "infra/modules/dns-zone/",
                 )
             ):
                 continue

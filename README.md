@@ -2168,7 +2168,7 @@ before cutover and recheck its available patches.
 
 Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eight passed
 under Python 3.12, with changed-source formatting and lint checks. The candidate
-image was pulled anonymously and its binary version probed without volumes or
-network. No live-source rehearsal or migration success is claimed by this code.
+image was pulled anonymously and its binary version probed without host data
+mounts or network. No live-source rehearsal or migration success is claimed by this code.
 Application preparation remains `redis_version="7.1"`, `redis_user_ids=[]` and
 `activate_services=false`; workflow/input integration follows the rehearsal.

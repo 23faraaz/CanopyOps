@@ -4,6 +4,7 @@ variable "application" {
     permissions_boundary_arn  = string
     domain_name               = string
     hosted_zone_id            = string
+    certificate_arn           = optional(string)
     postgres_version          = string
     redis_version             = string
     final_snapshot_identifier = string

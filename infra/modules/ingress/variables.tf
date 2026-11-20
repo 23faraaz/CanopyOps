@@ -83,3 +83,13 @@ variable "rate_limit" {
     error_message = "Choose a whole request limit between 100 and 100000."
   }
 }
+
+variable "certificate_arn" {
+  description = "Previously DNS-validated London ACM certificate covering both hosts; null creates one in this module"
+  type        = string
+  default     = null
+  validation {
+    condition     = var.certificate_arn == null ? true : can(regex("^arn:aws:acm:eu-west-2:[0-9]{12}:certificate/[a-f0-9-]+$", var.certificate_arn))
+    error_message = "Provide a London ACM certificate ARN, or null to request a certificate."
+  }
+}

@@ -2025,3 +2025,59 @@ nameserver. Do not enter IPv4 addresses or change the root domain's nameservers.
 Check delegation with `dig NS canopyops.faraazmo.co.uk`. Once delegation resolves,
 use this zone ID for Terraform-managed ACM validation and later ALB alias records.
 No ACM certificate, application record or Cloudflare change is created by this step.
+
+### Certificate-only bootstrap step
+
+After `dig NS canopyops.faraazmo.co.uk +short` returns the delegated AWS
+nameservers, enable `create_application_certificate` alongside the existing DNS
+zone opt-in. Bootstrap requests one London ACM public certificate covering
+`canopyops.faraazmo.co.uk` and `analytics.canopyops.faraazmo.co.uk`, writes two
+validation CNAMEs in the child zone and waits up to 15 minutes for issuance. It
+creates no ALB, application tasks or application A records. The module relies on
+the bootstrap AWS provider region; validation rejects enabling it outside London.
+
+Run in the operator's authenticated WSL session; these commands were not run by
+the agent:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap init -input=false
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan \
+  -var='create_application_dns_zone=true' \
+  -var='create_application_certificate=true' -out=application-certificate.tfplan
+```
+
+With the zone already applied, expect four additions: one certificate, two DNS
+validation records and Terraform's certificate-validation waiter. There must be
+no unrelated changes or deletions. Review the plan before applying it:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap apply application-certificate.tfplan
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap output -raw application_certificate_arn
+```
+
+Keep both opt-ins in private bootstrap inputs for subsequent operations. Leave
+validation CNAMEs in place for renewal; renewal eligibility also requires the
+certificate to be in use by an integrated service. An issued but unused certificate
+does not make the website reachable or prove a functioning HTTPS listener.
+If validation times out, check parent delegation, CNAME resolution and inherited
+CAA restrictions before retrying; do not disable validation or overwrite records
+owned by another stack. AWS authentication, permissions and issuance remain
+operator-verified steps.
+
+For the later application plan, set `application.certificate_arn` to the validated
+bootstrap output. The ingress module then creates no certificate or validation
+records of its own. Null retains its existing managed-certificate behavior, with
+address moves preserving the old uncounted resources. Do not switch a previously
+deployed managed certificate to external ownership without a separately reviewed
+migration plan; this change prepares the not-yet-deployed application.
+[AWS DNS validation](https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html),
+[renewal eligibility](https://docs.aws.amazon.com/acm/latest/userguide/check-certificate-renewal-status.html).
+
+Repeat offline contracts with `python3 scripts/module_checks.py --module acm`
+and `python3 scripts/module_checks.py --module ingress`. These use fictional DNS
+values and mock providers; they do not issue certificates or authenticate to AWS.
+
+Certificate-stage local verification: ACM three, ingress five and root three mock
+contracts passed, with formatting, validation, lint and strict security checks.
+Copied bootstrap source initialized and validated with its backend disabled.
+Live ACM issuance has not been run or claimed.

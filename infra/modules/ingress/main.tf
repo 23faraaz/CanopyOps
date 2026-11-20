@@ -6,6 +6,7 @@ locals {
   }
 }
 resource "aws_acm_certificate" "this" {
+  count                     = var.certificate_arn == null ? 1 : 0
   domain_name               = var.domain_name
   subject_alternative_names = ["analytics.${var.domain_name}"]
   validation_method         = "DNS"
@@ -15,15 +16,16 @@ resource "aws_acm_certificate" "this" {
   lifecycle { create_before_destroy = true }
 }
 resource "aws_route53_record" "validation" {
-  for_each = toset([var.domain_name, "analytics.${var.domain_name}"])
+  for_each = var.certificate_arn == null ? toset([var.domain_name, "analytics.${var.domain_name}"]) : toset([])
   zone_id  = var.hosted_zone_id
-  name     = one([for record in aws_acm_certificate.this.domain_validation_options : record.resource_record_name if record.domain_name == each.key])
-  type     = one([for record in aws_acm_certificate.this.domain_validation_options : record.resource_record_type if record.domain_name == each.key])
-  records  = [one([for record in aws_acm_certificate.this.domain_validation_options : record.resource_record_value if record.domain_name == each.key])]
+  name     = one([for record in aws_acm_certificate.this[0].domain_validation_options : record.resource_record_name if record.domain_name == each.key])
+  type     = one([for record in aws_acm_certificate.this[0].domain_validation_options : record.resource_record_type if record.domain_name == each.key])
+  records  = [one([for record in aws_acm_certificate.this[0].domain_validation_options : record.resource_record_value if record.domain_name == each.key])]
   ttl      = 60
 }
 resource "aws_acm_certificate_validation" "this" {
-  certificate_arn         = aws_acm_certificate.this.arn
+  count                   = var.certificate_arn == null ? 1 : 0
+  certificate_arn         = aws_acm_certificate.this[0].arn
   validation_record_fqdns = [for record in aws_route53_record.validation : record.fqdn]
   timeouts { create = "15m" }
 }
@@ -70,7 +72,7 @@ resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.this.arn
   port              = 443
   protocol          = "HTTPS"
-  certificate_arn   = aws_acm_certificate_validation.this.certificate_arn
+  certificate_arn   = var.certificate_arn != null ? var.certificate_arn : aws_acm_certificate_validation.this[0].certificate_arn
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   default_action {
     type = "fixed-response"
@@ -223,4 +225,14 @@ resource "aws_wafv2_web_acl_logging_configuration" "this" {
       single_header { name = redacted_fields.value }
     }
   }
+}
+
+# Preserve existing managed certificate addresses when opting out of external reuse.
+moved {
+  from = aws_acm_certificate.this
+  to   = aws_acm_certificate.this[0]
+}
+moved {
+  from = aws_acm_certificate_validation.this
+  to   = aws_acm_certificate_validation.this[0]
 }

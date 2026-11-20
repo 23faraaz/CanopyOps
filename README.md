@@ -2166,18 +2166,53 @@ before cutover and recheck its available patches.
 [PostgreSQL version compatibility](https://www.postgresql.org/docs/17/upgrading.html),
 [pg_dump guidance](https://www.postgresql.org/docs/17/app-pgdump.html).
 
-Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All eleven passed
-under Python 3.12, with changed-source formatting and lint checks. The candidate
-image was pulled anonymously and its binary version probed without host data
-mounts or network. No live-source rehearsal or migration success is claimed by this code.
-Application preparation remains `redis_version="7.1"`, `redis_user_ids=[]` and
-`activate_services=false`; workflow/input integration follows the rehearsal.
+Offline guard tests: `python3 -B tests/test_postgres_rehearsal.py`. All fifteen
+passed under Python 3.12, with changed-source formatting and lint checks. The
+controller explicitly includes the tools profile during configuration validation
+and separates stdout from stderr so warnings cannot corrupt numeric/JSON results.
+Target-stage checkpoints identify preparation, version, restore and verification
+failures. The candidate binary was also probed without host data mounts or network.
 
-The first candidate run exposed an early configuration bug: plain Compose config
-omitted the tools-profile restore client, so the new image guard raised KeyError
-before the source snapshot started. Validation now renders with `--profile tools`
-and reports a controlled configuration error if the service is absent. Eleven
-offline tests and a real Compose render of fictional services passed. Failure
-messages now include the safe phase, error type and evidence path, and image
-build progress is announced. This fixes the controller; it is not a passed
-real-data restore. Keep existing failed-run evidence and original volumes intact.
+#### Verified local PostgreSQL 17.12 to 17.11 restore
+
+The operator-run rehearsal passed on **20 November 2026**, run
+`0a9ae0ddba884cde8c9fab375dcc3e9a`, using source commit `c65182e`.
+The source and dump/restore clients were PostgreSQL **17.12**; the separate target
+reported PostgreSQL **17.11**, server version number **170011**. This used the
+actual persisted application dataset, not regenerated replacement readings.
+
+| Verification | Recorded result |
+| --- | --- |
+| Consistent snapshot and restore | 142,648 events, 142,648 unique event IDs, four states and four stations |
+| Station coverage | 35,662 observations per station: cedar-valley, coastal-grove, oak-meadow and north-ridge |
+| Data and state integrity | Source/restored exact-row, native-timestamp, migration and schema-metadata hashes matched; latest observed timestamps matched for all four stations |
+| Schema | `001_initial.sql`, schema owner `canopy_migrator`; migration rerun was a no-op |
+| Duplicate handling | Existing-event replay left the restored dataset unchanged; a new target event was accepted once and its duplicate ignored, leaving 142,649 target events |
+| SQL permissions | All five forbidden reader/writer actions were denied |
+| Application | Dashboard/static assets, both health endpoints, station queries and private metrics passed |
+| Source isolation | Source transactions were read-only; the target test event was absent from the source; original container IDs and volume bindings were unchanged |
+| Backup and cleanup | Backup checksum remained unchanged; only isolated test resources were removed, with the backup retained locally |
+
+The matching exact-row/state SHA256 was
+`f983d0bdd08c3a38fd605bfac28eb1a790bf9dd86e996b7b51e6abb4e341c646`.
+The retained dump was 7,662,595 bytes. Its measured dump-command duration was
+**7.296 seconds** and restore-command duration **4.124 seconds**. These are
+individual operation timings, **not end-to-end migration time or cutover downtime**.
+Source writes continued: the later source check counted 142,712 events. Those
+post-snapshot writes were not part of this point-in-time backup; final cloud
+cutover still requires writer fencing and a consistent final transfer.
+
+Local evidence: `backups/postgres-restore-0a9ae0ddba884cde8c9fab375dcc3e9a/summary.json`.
+The dump and full evidence directory remain private/ignored and are not committed.
+Preserve original volumes and earlier recovery evidence.
+
+This confirms the tested dataset's local upstream PostgreSQL 17.12-to-17.11
+compatibility. It does **not** establish RDS behavior, TLS/role correctness,
+security-patch equivalence, AWS failover, complete rollback activation or zero
+downtime. It does not replace the separate historical 28.14-second local cutover
+bound. Recheck RDS patch availability and rehearse against RDS before cutover.
+
+The local restore gate is now met for this run. Next prepare reviewed application
+inputs with PostgreSQL `17.11` as the candidate, Redis `7.1`, `redis_user_ids=[]`
+and `activate_services=false`, then connect those inputs to the guarded workflow
+and review the infrastructure plan before any application deployment.

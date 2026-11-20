@@ -34,6 +34,11 @@ COPY --from=builder /opt/venv /opt/venv
 COPY app/canopy/__init__.py app/canopy/api.py app/canopy/domain.py app/canopy/postgres.py app/canopy/metrics.py app/canopy/local_metrics.py ./canopy/
 COPY app/canopy/static/ ./canopy/static/
 COPY docker/cloud-api/storage.py ./canopy/storage.py
+# Cloud-only adapters leave the local migration/runtime source unchanged.
+COPY docker/cloud-common/connections.py ./cloud_connections.py
+COPY app/canopy/postgres.py ./canopy/_postgres_impl.py
+COPY docker/cloud-common/postgres.py ./canopy/postgres.py
+COPY docker/cloud-common/rds-eu-west-2-bundle.crt ./trust/rds-eu-west-2-bundle.crt
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

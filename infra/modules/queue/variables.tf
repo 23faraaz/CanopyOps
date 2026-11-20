@@ -48,3 +48,9 @@ variable "max_receive_count" {
     error_message = "Choose 2?10 whole deliveries."
   }
 }
+
+variable "writes_paused" {
+  description = "Explicitly fence new sends to the ingestion queue while draining or preparing migration/teardown"
+  type        = bool
+  default     = false
+}

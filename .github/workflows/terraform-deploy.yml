@@ -43,7 +43,7 @@ jobs:
     needs: review
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.TERRAFORM_AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     environment: terraform-deploy
     permissions:
       contents: read
@@ -75,7 +75,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_TF_ROLE_ARN }}
           aws-region: eu-west-2
           allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
-          role-duration-seconds: 900
+          role-duration-seconds: 3600
           unset-current-credentials: true
       - name: Execute the bounded demo operation
         env:

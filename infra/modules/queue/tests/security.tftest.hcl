@@ -41,3 +41,22 @@ run "reject_too_short_visibility" {
   variables { visibility_timeout_seconds = 1 }
   expect_failures = [var.visibility_timeout_seconds]
 }
+
+run "fenced_ingestion_keeps_tls_and_dlq_delivery" {
+  command = plan
+  variables { writes_paused = true }
+  override_resource {
+    override_during = plan
+    target          = aws_sqs_queue.readings
+    values          = { arn = "arn:aws:sqs:eu-west-2:123456789012:test-readings", url = "https://sqs.eu-west-2.amazonaws.com/123456789012/test-readings" }
+  }
+  override_resource {
+    override_during = plan
+    target          = aws_sqs_queue.dead_letter
+    values          = { arn = "arn:aws:sqs:eu-west-2:123456789012:test-dlq", url = "https://sqs.eu-west-2.amazonaws.com/123456789012/test-dlq" }
+  }
+  assert {
+    condition     = length(jsondecode(aws_sqs_queue_policy.https_only["readings"].policy).Statement) == 2 && length(jsondecode(aws_sqs_queue_policy.https_only["dead_letter"].policy).Statement) == 1 && jsondecode(aws_sqs_queue_policy.https_only["readings"].policy).Statement[1].Effect == "Deny"
+    error_message = "The fence must deny new source sends without removing HTTPS protection or blocking automatic DLQ delivery."
+  }
+}

@@ -160,6 +160,8 @@ class Verification:
         self.network = self.prefix + "-network"
         self.frontend = self.prefix + "-http"
         self.database = self.prefix + "-postgres"
+        self.database_host = "fixture." + self.prefix + ".eu-west-2.rds.amazonaws.com"
+        self.fixture_ca = temporary / "fixture-ca.crt"
         self.containers = []
         self.probe_tags = []
         self.report = {
@@ -219,6 +221,9 @@ class Verification:
             ".dockerignore",
             "docker/cloud-api/Dockerfile",
             "docker/cloud-api/storage.py",
+            "docker/cloud-common/connections.py",
+            "docker/cloud-common/postgres.py",
+            "docker/cloud-common/rds-eu-west-2-bundle.crt",
             "pyproject.toml",
         ]
         names += self.command(
@@ -241,6 +246,7 @@ class Verification:
                 ".css",
                 ".js",
                 ".toml",
+                ".crt",
             } or source.name in {"Dockerfile", ".dockerignore"}
             assert not any(
                 part in {".env", ".secrets", "backups", ".git", ".terraform"}
@@ -362,12 +368,18 @@ class Verification:
             "no-new-privileges:true",
         ]
         for key, value in {
-            "PGHOST": self.database,
+            "PGHOST": self.database_host,
+            "PGPASSWORD": "fictional-disposable-fixture",
             "PGDATABASE": database,
             "PGUSER": user,
             "PYTHONPATH": "/app",
         }.items():
             args += ["--env", key + "=" + value]
+        if variant == "cloud":
+            args += [
+                "--mount",
+                f"type=bind,source={self.fixture_ca},target=/app/trust/rds-eu-west-2-bundle.crt,readonly",
+            ]
         args += [
             "--mount",
             f"type=bind,source={ROOT / 'scripts/cloud_runtime_fixture.py'},target=/fixture.py,readonly",
@@ -414,6 +426,8 @@ class Verification:
             LABEL + "=" + self.run_id,
             "--network",
             self.network,
+            "--network-alias",
+            self.database_host,
             "--memory",
             "512m",
             "--cpus",
@@ -449,6 +463,38 @@ class Verification:
             time.sleep(0.5)
         else:
             raise RuntimeError("Disposable PostgreSQL failed to start")
+        # Ephemeral test TLS identity: private key stays inside this disposable
+        # PostgreSQL container. Only its public certificate leaves the container.
+        self.dc(
+            "exec",
+            "--user",
+            "postgres",
+            self.database,
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=" + self.database_host,
+            "-addext",
+            "subjectAltName=DNS:" + self.database_host,
+            "-keyout",
+            "/tmp/canopy-fixture.key",
+            "-out",
+            "/tmp/canopy-fixture.crt",
+        )
+        self.dc(
+            "exec", "--user", "postgres", self.database, "chmod", "600", "/tmp/canopy-fixture.key"
+        )
+        self.dc("cp", self.database + ":/tmp/canopy-fixture.crt", self.fixture_ca)
+        self.fixture_ca.chmod(0o644)
+        self.sql(
+            "ALTER SYSTEM SET ssl = 'on'; ALTER SYSTEM SET ssl_cert_file = '/tmp/canopy-fixture.crt'; ALTER SYSTEM SET ssl_key_file = '/tmp/canopy-fixture.key'; SELECT pg_reload_conf();"
+        )
         self.sql(
             "CREATE ROLE canopy_migrator; CREATE ROLE canopy_reader LOGIN; CREATE ROLE canopy_writer LOGIN;"
         )
@@ -457,7 +503,7 @@ class Verification:
         self.sql("CREATE DATABASE canopy_roundtrip;")
         self.sql(schema, database="canopy_roundtrip")
         self.report["database_security_note"] = (
-            "Trust authentication is restricted to this disposable internal Docker network; no database host port or real secret is used. Never deploy this fixture configuration."
+            "Disposable internal PostgreSQL uses trust authentication and ephemeral fixture TLS. Cloud clients verify the fixture CA and DNS hostname. No database host port, existing data or real secret is used. This is not an RDS integration test; never deploy this fixture configuration."
         )
         self.save()
 
@@ -492,12 +538,18 @@ class Verification:
         ]
         for key, value in {
             "BACKEND": "postgres",
-            "PGHOST": self.database,
+            "PGHOST": self.database_host,
+            "PGPASSWORD": "fictional-disposable-fixture",
             "PGDATABASE": "canopy",
             "PGUSER": "canopy_reader",
             "APP_COMMIT": self.report["git_head"],
         }.items():
             args += ["--env", key + "=" + value]
+        if variant == "cloud":
+            args += [
+                "--mount",
+                f"type=bind,source={self.fixture_ca},target=/app/trust/rds-eu-west-2-bundle.crt,readonly",
+            ]
         self.dc(*args, self.tags[variant])
         self.dc("network", "connect", self.network, name)
         self.dc("start", name)
@@ -546,6 +598,7 @@ print(json.dumps({'uid':os.getuid(),'python':platform.python_version(),'architec
         )
         assert rejected.returncode != 0 and "requires BACKEND=postgres" in rejected.stdout
         self.actor("seed")
+        self.report["tls_verification"] = self.actor("tls", user="canopy_reader")
         self.report["postgres_behaviour"] = self.actor("exercise")
         name, url, _ = self.start_api("cloud", 0.5, 1024, "functional")
         deadline = time.monotonic() + 20

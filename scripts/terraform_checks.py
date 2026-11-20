@@ -80,7 +80,9 @@ class Checks:
                 continue
             if root == "infra" and any(name.startswith(child + "/") for child in ROOTS[1:]):
                 continue
-            if root == "infra/bootstrap" and not name.startswith("infra/bootstrap/"):
+            if root == "infra/bootstrap" and not name.startswith(
+                ("infra/bootstrap/", "infra/modules/runtime-boundary/", "infra/modules/deployment-access/")
+            ):
                 continue
             if root == "infra/registry" and not name.startswith(
                 ("infra/registry/", "infra/modules/ecr/")

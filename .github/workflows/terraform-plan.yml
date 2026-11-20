@@ -1,10 +1,10 @@
 name: Terraform plan
 on:
   pull_request:
-    paths: ['infra/**', '.github/workflows/terraform-*.yml', 'scripts/terraform_automation.py', 'scripts/deployment_inputs.py', 'tests/test_deployment_inputs.py', 'scripts/cloud_plan_policy.py', 'scripts/cloud_teardown.py', 'tests/test_terraform_automation.py']
+    paths: ['infra/**', '.github/workflows/terraform-*.yml', 'scripts/terraform_automation.py', 'scripts/deployment_inputs.py', 'scripts/plan_review.py', 'tests/test_plan_review.py', 'tests/test_deployment_inputs.py', 'scripts/cloud_plan_policy.py', 'scripts/cloud_teardown.py', 'tests/test_terraform_automation.py']
   push:
     branches: [main]
-    paths: ['infra/**', '.github/workflows/terraform-*.yml', 'scripts/terraform_automation.py', 'scripts/deployment_inputs.py', 'tests/test_deployment_inputs.py', 'scripts/cloud_plan_policy.py', 'scripts/cloud_teardown.py', 'tests/test_terraform_automation.py']
+    paths: ['infra/**', '.github/workflows/terraform-*.yml', 'scripts/terraform_automation.py', 'scripts/deployment_inputs.py', 'scripts/plan_review.py', 'tests/test_plan_review.py', 'tests/test_deployment_inputs.py', 'scripts/cloud_plan_policy.py', 'scripts/cloud_teardown.py', 'tests/test_terraform_automation.py']
   workflow_dispatch:
 permissions:
   contents: read

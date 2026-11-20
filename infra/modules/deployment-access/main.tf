@@ -253,7 +253,7 @@ locals {
           "acm:DescribeCertificate",
           "acm:ListTagsForCertificate"
         ],
-        "Resource" : "arn:aws:acm:${var.aws_region}:${var.account_id}:certificate/*",
+        "Resource" : var.certificate_arn,
         "Condition" : {
           "StringEquals" : {
             "aws:RequestedRegion" : var.aws_region,
@@ -476,7 +476,6 @@ locals {
         "Action" : [
           "ecs:UpdateCluster",
           "ecs:UpdateClusterSettings",
-          "ecs:DeleteCluster",
           "ecs:TagResource",
           "ecs:UntagResource"
         ],
@@ -709,7 +708,6 @@ locals {
         "Sid" : "ManageRuntimeSecretMetadata",
         "Effect" : "Allow",
         "Action" : [
-          "secretsmanager:DeleteSecret",
           "secretsmanager:RestoreSecret",
           "secretsmanager:TagResource",
           "secretsmanager:UntagResource"
@@ -784,40 +782,6 @@ locals {
         }
       },
       {
-        "Sid" : "RequestTaggedCertificate",
-        "Effect" : "Allow",
-        "Action" : [
-          "acm:RequestCertificate"
-        ],
-        "Resource" : "*",
-        "Condition" : {
-          "StringEquals" : {
-            "aws:RequestedRegion" : var.aws_region,
-            "aws:RequestTag/Project" : var.project_name,
-            "aws:RequestTag/Environment" : var.environment,
-            "aws:RequestTag/ManagedBy" : "Terraform"
-          }
-        }
-      },
-      {
-        "Sid" : "ManageOwnedCertificates",
-        "Effect" : "Allow",
-        "Action" : [
-          "acm:DeleteCertificate",
-          "acm:AddTagsToCertificate",
-          "acm:RemoveTagsFromCertificate"
-        ],
-        "Resource" : "arn:aws:acm:${var.aws_region}:${var.account_id}:certificate/*",
-        "Condition" : {
-          "StringEquals" : {
-            "aws:RequestedRegion" : var.aws_region,
-            "aws:ResourceTag/Project" : var.project_name,
-            "aws:ResourceTag/Environment" : var.environment,
-            "aws:ResourceTag/ManagedBy" : "Terraform"
-          }
-        }
-      },
-      {
         "Sid" : "ChangeOnlyApplicationDns",
         "Effect" : "Allow",
         "Action" : [
@@ -825,24 +789,15 @@ locals {
         ],
         "Resource" : "arn:aws:route53:::hostedzone/${var.hosted_zone_id}",
         "Condition" : {
-          "ForAllValues:StringLike" : {
+          "ForAllValues:StringEquals" : {
             "route53:ChangeResourceRecordSetsNormalizedRecordNames" : [
               var.domain_name,
-              "analytics.${var.domain_name}",
-              "_*.${var.domain_name}",
-              "_*.analytics.${var.domain_name}"
-            ]
-          },
-          "ForAllValues:StringEquals" : {
-            "route53:ChangeResourceRecordSetsRecordTypes" : [
-              "A",
-              "CNAME"
+              "analytics.${var.domain_name}"
             ],
-            "route53:ChangeResourceRecordSetsActions" : [
-              "CREATE",
-              "UPSERT",
-              "DELETE"
-            ]
+            "route53:ChangeResourceRecordSetsRecordTypes" : [
+              "A"
+            ],
+            "route53:ChangeResourceRecordSetsActions" : var.mode == "destroy" ? ["DELETE"] : ["CREATE", "UPSERT", "DELETE"]
           }
         }
       },
@@ -905,11 +860,27 @@ locals {
     ],
     "storage" : [
       {
+        "Sid" : "DeleteDisposableLogGroups",
+        "Effect" : "Allow",
+        "Action" : ["logs:DeleteLogGroup"],
+        "Resource" : [
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-api",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-api:*",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-worker",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-worker:*",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-analytics",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/ecs/${var.name_prefix}-analytics:*",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:/aws/rds/instance/${var.name_prefix}-postgres/*",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:aws-waf-logs-${var.name_prefix}",
+          "arn:aws:logs:${var.aws_region}:${var.account_id}:log-group:aws-waf-logs-${var.name_prefix}:*"
+        ],
+        "Condition" : { "StringEquals" : { "aws:RequestedRegion" : var.aws_region } }
+      },
+      {
         "Sid" : "ManageApplicationLogGroups",
         "Effect" : "Allow",
         "Action" : [
           "logs:CreateLogGroup",
-          "logs:DeleteLogGroup",
           "logs:PutRetentionPolicy",
           "logs:AssociateKmsKey",
           "logs:DisassociateKmsKey",
@@ -1001,19 +972,6 @@ locals {
         }
       },
       {
-        "Sid" : "RemoveLogAlias",
-        "Effect" : "Allow",
-        "Action" : [
-          "kms:DeleteAlias"
-        ],
-        "Resource" : "arn:aws:kms:${var.aws_region}:${var.account_id}:alias/${var.name_prefix}-logs",
-        "Condition" : {
-          "StringEquals" : {
-            "aws:RequestedRegion" : var.aws_region
-          }
-        }
-      },
-      {
         "Sid" : "CreateOnlyApplicationBuckets",
         "Effect" : "Allow",
         "Action" : [
@@ -1081,8 +1039,6 @@ locals {
           "iam:UpdateRole",
           "iam:UpdateAssumeRolePolicy",
           "iam:PutRolePolicy",
-          "iam:DeleteRolePolicy",
-          "iam:DeleteRole",
           "iam:TagRole",
           "iam:UntagRole"
         ],
@@ -1170,15 +1126,14 @@ locals {
   }
   destroy_actions = [
     "ec2:DeleteSecurityGroup", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:DeleteVpcEndpoints",
-    "ecs:DeleteCluster", "ecs:DeleteService",
-    "iam:DeleteRole", "iam:DeleteRolePolicy",
+    "ecs:DeleteService",
     "rds:DeleteDBInstance", "rds:DeleteDBSubnetGroup", "rds:DeleteDBParameterGroup", "rds:CreateDBSnapshot", "rds:AddTagsToResource",
     "elasticache:DeleteReplicationGroup", "elasticache:DeleteCacheSubnetGroup", "elasticache:DeleteUserGroup",
-    "sqs:DeleteQueue", "secretsmanager:DeleteSecret",
+    "sqs:DeleteQueue",
     "elasticloadbalancing:DeleteLoadBalancer", "elasticloadbalancing:DeleteTargetGroup", "elasticloadbalancing:DeleteListener", "elasticloadbalancing:DeleteRule",
-    "acm:DeleteCertificate", "route53:ChangeResourceRecordSets",
+    "route53:ChangeResourceRecordSets",
     "wafv2:DeleteWebACL", "wafv2:DisassociateWebACL", "wafv2:DeleteLoggingConfiguration",
-    "logs:DeleteLogDelivery", "logs:DeleteLogGroup", "kms:DeleteAlias"
+    "logs:DeleteLogDelivery", "logs:DeleteLogGroup"
   ]
   writes = {
     for group, statements in local.statements : group => [

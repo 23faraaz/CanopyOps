@@ -1,16 +1,17 @@
 mock_provider "aws" { override_during = plan }
 variables {
-  name_prefix    = "canopyops-demo"
-  account_id     = "123456789012"
-  aws_region     = "eu-west-2"
-  project_name   = "canopyops"
-  environment    = "demo"
-  role_name      = "canopyops-demo-terraform-plan"
-  mode           = "plan"
-  domain_name    = "demo.example.test"
-  hosted_zone_id = "ZTEST123"
-  boundary_arn   = "arn:aws:iam::123456789012:policy/canopyops-demo-runtime-boundary"
-  tags           = { Project = "canopyops", Environment = "demo", ManagedBy = "Terraform" }
+  name_prefix     = "canopyops-demo"
+  account_id      = "123456789012"
+  aws_region      = "eu-west-2"
+  project_name    = "canopyops"
+  environment     = "demo"
+  role_name       = "canopyops-demo-terraform-plan"
+  mode            = "plan"
+  domain_name     = "demo.example.test"
+  hosted_zone_id  = "ZTEST123"
+  certificate_arn = "arn:aws:acm:eu-west-2:123456789012:certificate/11111111-1111-1111-1111-111111111111"
+  boundary_arn    = "arn:aws:iam::123456789012:policy/canopyops-demo-runtime-boundary"
+  tags            = { Project = "canopyops", Environment = "demo", ManagedBy = "Terraform" }
 }
 run "plan_only_reads_and_protective_denies" {
   command = plan
@@ -53,4 +54,133 @@ run "wrong_role_is_rejected" {
   command = plan
   variables { role_name = "Administrator" }
   expect_failures = [var.role_name]
+}
+
+run "deploy_preserves_bootstrap_and_foundation" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : row.Effect == "Deny" || alltrue([
+        for action in row.Action : !contains([
+          "acm:RequestCertificate", "acm:DeleteCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate",
+          "ecs:DeleteCluster", "iam:DeleteRole", "iam:DeleteRolePolicy", "secretsmanager:DeleteSecret",
+          "kms:DeleteAlias", "kms:ScheduleKeyDeletion", "s3:DeleteBucket", "s3:DeleteObject", "s3:DeleteObjectVersion"
+        ], action)
+      ])
+    ])])
+    error_message = "Application identities must not mutate bootstrap certificates or delete retained foundation resources."
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : !contains(row.Action, "acm:DescribeCertificate") || row.Resource == var.certificate_arn
+    ])])
+    error_message = "Certificate metadata reads must reference the exact bootstrap certificate."
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement :
+      !contains(row.Action, "route53:ChangeResourceRecordSets") || (
+        row.Resource == "arn:aws:route53:::hostedzone/ZTEST123" &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsNormalizedRecordNames"]) == toset(["demo.example.test", "analytics.demo.example.test"]), false) &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsRecordTypes"]) == toset(["A"]), false) &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsActions"]) == toset(["CREATE", "UPSERT", "DELETE"]), false)
+      )
+    ])
+    error_message = "DNS writes must target only the two application A records with operation-specific actions, preserving validation CNAMEs and parent delegation."
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : !contains(row.Action, "logs:DeleteLogGroup") || toset(row.Resource) == toset([
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-api",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-api:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-worker",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-worker:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-analytics",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-analytics:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/aws/rds/instance/canopyops-demo-postgres/*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:aws-waf-logs-canopyops-demo",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:aws-waf-logs-canopyops-demo:*"
+      ])
+    ])])
+    error_message = "Log deletion must exclude retained generator logs and wildcard component access."
+  }
+  assert {
+    condition     = length(aws_iam_policy.this) <= 10 && alltrue([for policy in values(aws_iam_policy.this) : length(policy.policy) <= 6144])
+    error_message = "Tightened permissions must still fit IAM managed-policy and attachment quotas."
+  }
+}
+
+run "destroy_preserves_bootstrap_and_foundation" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : row.Effect == "Deny" || alltrue([
+        for action in row.Action : !contains([
+          "acm:RequestCertificate", "acm:DeleteCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate",
+          "ecs:DeleteCluster", "iam:DeleteRole", "iam:DeleteRolePolicy", "secretsmanager:DeleteSecret",
+          "kms:DeleteAlias", "kms:ScheduleKeyDeletion", "s3:DeleteBucket", "s3:DeleteObject", "s3:DeleteObjectVersion"
+        ], action)
+      ])
+    ])])
+    error_message = "Application identities must not mutate bootstrap certificates or delete retained foundation resources."
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : !contains(row.Action, "acm:DescribeCertificate") || row.Resource == var.certificate_arn
+    ])])
+    error_message = "Certificate metadata reads must reference the exact bootstrap certificate."
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement :
+      !contains(row.Action, "route53:ChangeResourceRecordSets") || (
+        row.Resource == "arn:aws:route53:::hostedzone/ZTEST123" &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsNormalizedRecordNames"]) == toset(["demo.example.test", "analytics.demo.example.test"]), false) &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsRecordTypes"]) == toset(["A"]), false) &&
+        try(toset(row.Condition["ForAllValues:StringEquals"]["route53:ChangeResourceRecordSetsActions"]) == toset(["DELETE"]), false)
+      )
+    ])
+    error_message = "DNS writes must target only the two application A records with operation-specific actions, preserving validation CNAMEs and parent delegation."
+  }
+  assert {
+    condition = alltrue([for policy in values(aws_iam_policy.this) : alltrue([
+      for row in jsondecode(policy.policy).Statement : !contains(row.Action, "logs:DeleteLogGroup") || toset(row.Resource) == toset([
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-api",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-api:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-worker",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-worker:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-analytics",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/ecs/canopyops-demo-analytics:*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:/aws/rds/instance/canopyops-demo-postgres/*",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:aws-waf-logs-canopyops-demo",
+        "arn:aws:logs:eu-west-2:123456789012:log-group:aws-waf-logs-canopyops-demo:*"
+      ])
+    ])])
+    error_message = "Log deletion must exclude retained generator logs and wildcard component access."
+  }
+  assert {
+    condition     = length(aws_iam_policy.this) <= 10 && alltrue([for policy in values(aws_iam_policy.this) : length(policy.policy) <= 6144])
+    error_message = "Tightened permissions must still fit IAM managed-policy and attachment quotas."
+  }
+}
+
+run "reject_certificate_from_another_account" {
+  command = plan
+  variables {
+    certificate_arn = "arn:aws:acm:eu-west-2:999999999999:certificate/11111111-1111-1111-1111-111111111111"
+  }
+  expect_failures = [var.certificate_arn]
+}
+run "reject_certificate_from_another_region" {
+  command = plan
+  variables {
+    certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-1111-1111-1111-111111111111"
+  }
+  expect_failures = [var.certificate_arn]
 }

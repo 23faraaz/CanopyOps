@@ -47,7 +47,7 @@ variable "domain_name" {
   }
 }
 variable "hosted_zone_id" {
-  description = "The one authoritative hosted zone allowed for application and ACM records"
+  description = "The one authoritative hosted zone allowed for the two application A records"
   type        = string
   validation {
     condition     = can(regex("^Z[A-Z0-9]+$", var.hosted_zone_id))
@@ -75,4 +75,13 @@ variable "project_name" {
 variable "environment" {
   description = "Ownership environment tag"
   type        = string
+}
+
+variable "certificate_arn" {
+  description = "Exact retained bootstrap ACM certificate; application roles may reference it only"
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws:acm:${var.aws_region}:${var.account_id}:certificate/[a-f0-9-]{36}$", var.certificate_arn))
+    error_message = "Use this account's retained London certificate ARN."
+  }
 }

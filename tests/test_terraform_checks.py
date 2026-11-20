@@ -14,6 +14,8 @@ import terraform_checks
         "infra/terraform.tfvars",
         "infra/bootstrap/terraform.tfvars",
         "infra/private.auto.tfvars",
+        "infra/terraform.tfvars.example",
+        "infra/secrets.json",
         "infra/private.auto.tfvars.json",
         "infra/terraform.tfstate",
         "infra/terraform.tfstate.backup",
@@ -37,7 +39,7 @@ def test_terraform_source_filter_rejects_private_inputs_and_artifacts(path):
         "infra/bootstrap/main.tf",
         "infra/.terraform.lock.hcl",
         "infra/bootstrap/tests/network_permissions.tftest.hcl",
-        "infra/terraform.tfvars.example",
+        "infra/deployment.json",
     ],
 )
 def test_terraform_source_filter_includes_explicit_public_inputs(path):

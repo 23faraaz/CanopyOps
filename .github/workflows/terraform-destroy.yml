@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_environment:
-        description: Type canopyops-demo; destroys only the implemented demo network, preserving bootstrap and registry
+        description: Type canopyops-demo; deletes only reviewed disposable demo resources, preserving bootstrap, registry and retained foundation
         required: true
         type: string
 permissions:

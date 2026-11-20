@@ -44,8 +44,8 @@ def python_checks():
         "sh",
         "-ec",
         "pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r app/requirements-dev.txt >/tmp/install.log 2>&1 || { cat /tmp/install.log; exit 1; }; "
-        "python --version; python -m pip check; python -m compileall -q app scripts tests docker/cloud-api/storage.py; python -m ruff check app scripts tests docker/cloud-api/storage.py; "
-        "python -m ruff format --check app scripts tests docker/cloud-api/storage.py; "
+        "python --version; python -m pip check; python -m compileall -q app scripts tests docker/cloud-api/storage.py docker/cloud-common; python -m ruff check app scripts tests docker/cloud-api/storage.py docker/cloud-common; "
+        "python -m ruff format --check app scripts tests docker/cloud-api/storage.py docker/cloud-common; "
         "python -m pytest -q -p no:cacheprovider --basetemp /tmp/canopy-tests",
     )
 

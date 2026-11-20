@@ -14,6 +14,8 @@ import re
 import subprocess
 
 from terraform_checks import Checks, TERRAFORM
+from cloud_plan_policy import check as check_cloud_resource
+from cloud_teardown import assert_ready as assert_teardown_ready
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "23faraaz/CanopyOps"
@@ -23,6 +25,16 @@ STATE_KEY = "canopyops/demo/terraform.tfstate"
 PLAN_PREFIX = "canopyops/demo/plans/"
 MAX_PLAN_BYTES = 4 * 1024 * 1024
 PLAN_AGE = timedelta(hours=2)
+DESTROY_TARGETS = (
+    "service",
+    "ingress",
+    "cache",
+    "database",
+    "connectivity",
+    "security",
+    "queue",
+    "network",
+)
 FIELDS = {
     "aws_vpc": ["cidr_block", "enable_dns_support", "enable_dns_hostnames"],
     "aws_subnet": ["cidr_block", "availability_zone", "vpc_id", "map_public_ip_on_launch"],
@@ -57,8 +69,13 @@ def redacted(value, mask):
     return value
 
 
-def review_plan(plan, mode):
-    if mode not in {"apply", "destroy"} or plan.get("errored") or not plan.get("complete", True):
+def review_plan(plan, mode, *, targeted_destroy=False):
+    if (
+        mode not in {"apply", "destroy"}
+        or plan.get("errored")
+        or plan.get("deferred_changes")
+        or (not plan.get("complete", True) and not (mode == "destroy" and targeted_destroy))
+    ):
         raise ValueError("Incomplete or invalid Terraform plan")
     expected = {"project_name": "canopyops", "environment": "demo", "aws_region": REGION}
     if any(
@@ -66,6 +83,17 @@ def review_plan(plan, mode):
         for key, value in expected.items()
     ):
         raise ValueError("Plan does not target the approved London demo configuration")
+    application = plan.get("variables", {}).get("application", {}).get("value")
+    if isinstance(application, dict) and application.get("teardown_prepared"):
+        if application.get("activate_services") or not application.get("pause_ingestion"):
+            raise ValueError("Teardown requires stopped services and fenced ingestion")
+    if mode == "destroy" and isinstance(application, dict):
+        if (
+            not application.get("teardown_prepared")
+            or not application.get("pause_ingestion")
+            or application.get("activate_services")
+        ):
+            raise ValueError("Application teardown was not prepared")
     rows = []
     for resource in plan.get("resource_changes", []):
         change = resource["change"]
@@ -78,11 +106,20 @@ def review_plan(plan, mode):
             continue
         address = resource["address"]
         kind = resource["type"]
-        if kind not in FIELDS or not address.startswith("module.network."):
-            raise ValueError("Plan exceeds the implemented network-only demo scope")
+        if address.startswith("module.network.") and kind in FIELDS:
+            fields = FIELDS[kind]
+        else:
+            application = plan.get("variables", {}).get("application", {}).get("value")
+            fields = check_cloud_resource(resource, application, mode)
         allowed = (
             [["no-op"], ["create"], ["update"]] if mode == "apply" else [["no-op"], ["delete"]]
         )
+        if (
+            mode == "apply"
+            and kind == "aws_ecs_task_definition"
+            and not address.startswith("module.network.")
+        ):
+            allowed = [*allowed, ["create", "delete"]]
         if actions not in allowed:
             raise ValueError("Destructive/replacement apply or mixed destroy plan rejected")
         if actions == ["no-op"]:
@@ -92,15 +129,19 @@ def review_plan(plan, mode):
             "address": address,
             "actions": actions,
             "computed_after": [
-                key
-                for key in FIELDS[kind]
-                if isinstance(unknown, dict) and unknown.get(key) is True
+                key for key in fields if isinstance(unknown, dict) and unknown.get(key) is True
             ],
         }
+        if not address.startswith("module.network."):
+            row["computed_security_documents"] = [
+                key
+                for key in ["policy", "container_definitions", "assume_role_policy"]
+                if isinstance(unknown, dict) and unknown.get(key) is True
+            ]
         for side in ["before", "after"]:
             values = change.get(side) or {}
             mask = change.get(side + "_sensitive") or {}
-            selected = {key: values[key] for key in FIELDS[kind] if key in values}
+            selected = {key: values[key] for key in fields if key in values}
             tags = values.get("tags_all", values.get("tags", {})) or {}
             selected["ownership_tags"] = {
                 key: tags[key]
@@ -221,7 +262,7 @@ class Runner:
             private_output = value.stdout + value.stderr
             (self.directory / "private-command-error.log").write_text(private_output)
             code = re.search(
-                r"(?:An error occurred \(|api error )([A-Za-z][A-Za-z0-9]+)", private_output
+                r"(?:An error occurred \(|api error )([A-Za-z][A-Za-z0-9_.-]+)", private_output
             )
             if "Saved plan is stale" in private_output:
                 raise RuntimeError("Saved plan is stale; generate and review a new plan")
@@ -375,6 +416,8 @@ def preflight(runner, args):
             "--",
             "infra",
             "scripts/terraform_automation.py",
+            "scripts/cloud_plan_policy.py",
+            "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",
         ]
     )
@@ -427,12 +470,19 @@ def plan(runner, args):
         "-out=/work/plan.bin",
     ]
     if mode == "destroy":
-        command.append("-destroy")
+        command += ["-destroy", *["-target=module." + name for name in DESTROY_TARGETS]]
     workspace.run(*command)
     binary = workspace.path / "plan.bin"
     if not 0 < binary.stat().st_size <= MAX_PLAN_BYTES:
         raise ValueError("Saved plan exceeds the bounded demo size")
-    rows = review_plan(json.loads(workspace.run("show", "-json", "/work/plan.bin")), mode)
+    reviewed = json.loads(workspace.run("show", "-json", "/work/plan.bin"))
+    rows = review_plan(reviewed, mode, targeted_destroy=mode == "destroy")
+    quiescence = None
+    if (
+        mode == "destroy"
+        and reviewed.get("variables", {}).get("application", {}).get("value") is not None
+    ):
+        quiescence = assert_teardown_ready(runner.aws, args.account)
     key = f"{PLAN_PREFIX}{args.run}/{args.attempt}/{mode}.tfplan"
     digest = sha256(binary)
     uploaded = runner.aws(
@@ -473,6 +523,7 @@ def plan(runner, args):
         "bytes": binary.stat().st_size,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "review": rows,
+        "teardown_preflight": quiescence,
         "lock_sha256": sha256(ROOT / "infra/.terraform.lock.hcl"),
         "inputs_sha256": sha256(ROOT / "infra/terraform.tfvars.example"),
         "backend_sha256": sha256(ROOT / "infra/backend.tf"),
@@ -498,6 +549,8 @@ def apply(runner, args):
             "--",
             "infra",
             "scripts/terraform_automation.py",
+            "scripts/cloud_plan_policy.py",
+            "scripts/cloud_teardown.py",
             "scripts/terraform_checks.py",
         ]
     )
@@ -536,7 +589,14 @@ def apply(runner, args):
     if sha256(binary) != meta["plan_sha256"]:
         raise ValueError("Saved plan checksum mismatch")
     workspace.initialize()
-    rows = review_plan(json.loads(workspace.run("show", "-json", "/work/plan.bin")), mode)
+    reviewed = json.loads(workspace.run("show", "-json", "/work/plan.bin"))
+    rows = review_plan(reviewed, mode, targeted_destroy=mode == "destroy")
+    quiescence = None
+    if (
+        mode == "destroy"
+        and reviewed.get("variables", {}).get("application", {}).get("value") is not None
+    ):
+        quiescence = assert_teardown_ready(runner.aws, args.account)
     if rows != meta["review"]:
         raise ValueError("Saved plan review changed")
     runner.current_main(args.commit)
@@ -550,6 +610,7 @@ def apply(runner, args):
         "plan_version": meta["version_id"],
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "reviewed_changes": rows,
+        "teardown_preflight": quiescence,
     }
     output = runner.directory / "receipt"
     output.mkdir()

@@ -103,16 +103,49 @@ def roundtrip():
     return {"sqlite_backup_export_import": "passed", "manifest": imported}
 
 
+def tls_contract():
+    import psycopg
+    import socket
+
+    with connect() as db:
+        assert db.execute("SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()").fetchone()[0]
+        host = db.info.host
+    options = {
+        "host": host,
+        "hostaddr": socket.gethostbyname(host),
+        "dbname": "canopy",
+        "user": "canopy_reader",
+        "password": "fictional-disposable-fixture",
+        "connect_timeout": 3,
+        "sslmode": "verify-full",
+        "sslrootcert": "/app/trust/rds-eu-west-2-bundle.crt",
+    }
+    for changes in [{"sslrootcert": "/etc/ssl/cert.pem"}, {"host": "wrong." + host}]:
+        try:
+            with psycopg.connect(**{**options, **changes}):
+                pass
+        except psycopg.OperationalError as error:
+            if "certificate" not in str(error).lower():
+                raise AssertionError(
+                    "Connection failed for a reason other than TLS verification"
+                ) from None
+            continue
+        raise AssertionError("TLS accepted the wrong CA or hostname")
+    return {"encrypted": True, "untrusted_ca_rejected": True, "wrong_hostname_rejected": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "operation", choices=["seed", "exercise", "manifest", "produce", "permissions", "roundtrip"]
+        "operation",
+        choices=["seed", "exercise", "manifest", "produce", "permissions", "roundtrip", "tls"],
     )
     parser.add_argument("--count", type=int, default=30)
     parser.add_argument("--rate", type=float, default=2)
     args = parser.parse_args()
     functions = {
         "seed": seed,
+        "tls": tls_contract,
         "exercise": exercise,
         "manifest": manifest,
         "permissions": reader_permissions,

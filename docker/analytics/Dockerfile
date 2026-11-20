@@ -22,6 +22,13 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY app/canopy/__init__.py app/canopy/domain.py app/canopy/postgres.py ./canopy/
 COPY app/analytics/ ./analytics/
+# Cloud-only adapters leave the local migration/runtime source unchanged.
+COPY docker/cloud-common/connections.py ./cloud_connections.py
+COPY app/canopy/postgres.py ./canopy/_postgres_impl.py
+COPY docker/cloud-common/postgres.py ./canopy/postgres.py
+COPY docker/cloud-common/rds-eu-west-2-bundle.crt ./trust/rds-eu-west-2-bundle.crt
+COPY app/analytics/cache.py ./analytics/_cache_impl.py
+COPY docker/cloud-common/cache.py ./analytics/cache.py
 USER 10001:10001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/live',timeout=2)"]
 CMD ["python", "-m", "analytics.api"]

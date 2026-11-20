@@ -23,6 +23,13 @@ COPY --from=builder /opt/venv /opt/venv
 COPY app/canopy/__init__.py app/canopy/domain.py app/canopy/postgres.py app/canopy/metrics.py ./canopy/
 COPY app/ingestion/ ./ingestion/
 COPY scripts/recovery/ledger.py ./scripts/recovery/ledger.py
+# Cloud-only adapters leave the local migration/runtime source unchanged.
+COPY docker/cloud-common/connections.py ./cloud_connections.py
+COPY app/canopy/postgres.py ./canopy/_postgres_impl.py
+COPY docker/cloud-common/postgres.py ./canopy/postgres.py
+COPY docker/cloud-common/rds-eu-west-2-bundle.crt ./trust/rds-eu-west-2-bundle.crt
+COPY docker/cloud-common/outbox.py ./cloud_outbox.py
+COPY docker/cloud-common/producer.py ./ingestion/producer.py
 USER 10001:10001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=6 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/metrics',timeout=2)"]
 CMD ["python", "-m", "ingestion.worker"]

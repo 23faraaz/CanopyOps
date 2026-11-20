@@ -1,7 +1,7 @@
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-include = ["app/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
+include = ["app/**/*.py", "scripts/**/*.py", "tests/**/*.py", "docker/cloud-common/**/*.py"]
 
 [tool.ruff.lint]
 select = ["E4", "E9", "F"]

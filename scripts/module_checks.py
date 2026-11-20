@@ -17,18 +17,38 @@ import uuid
 from terraform_checks import TERRAFORM, TFLINT, TRIVY
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ("queue", "database", "cache", "ecs-service", "ingress", "network-security")
+MODULES = (
+    "queue",
+    "database",
+    "cache",
+    "ecs-service",
+    "ingress",
+    "network-security",
+    "private-connectivity",
+    "ecs-foundation",
+    "cloud-root",
+    "runtime-boundary",
+    "deployment-access",
+)
 
 
 def sources(module, destination):
-    source = ROOT / "infra/modules" / module
+    source = ROOT / "infra" if module == "cloud-root" else ROOT / "infra/modules" / module
     destination.mkdir()
-    paths = list(source.glob("*.tf")) + list((source / "tests").glob("*.tftest.hcl"))
+    paths = [path for path in source.glob("*.tf") if path.name != "backend.tf"] + list(
+        (source / "tests").glob("*.tftest.hcl")
+    )
+    if module == "cloud-root":
+        paths += [
+            path
+            for name in (*[item for item in MODULES if item != "cloud-root"], "network")
+            for path in (source / "modules" / name).glob("*.tf")
+        ]
     for path in paths:
         if path.is_symlink():
             raise ValueError("Refusing a module source symlink")
         target = destination / path.relative_to(source)
-        target.parent.mkdir(exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
     # Public provider lock only. Never copy the root directory or input examples.
     shutil.copyfile(ROOT / "infra/.terraform.lock.hcl", destination / ".terraform.lock.hcl")
@@ -172,6 +192,46 @@ def main():
                         ".",
                     ]
                     run(module, "security", TRIVY, scan, network="bridge")
+                    if module == "ecs-foundation":
+                        source = directory / module / "main.tf"
+                        original = source.read_text()
+                        marker = "#trivy:ignore:AVD-AWS-0132:exp:2026-12-19"
+                        if original.count(marker) != 1:
+                            raise ValueError("ALB SSE-S3 exception must remain singular")
+                        variants = {
+                            "removed": original.replace(marker, ""),
+                            "expired": original.replace(
+                                marker, marker.replace("2026-12-19", "2000-01-01")
+                            ),
+                            "wrong-resource": original.replace(marker, "").replace(
+                                'resource "aws_secretsmanager_secret" "runtime" {',
+                                marker + '\nresource "aws_secretsmanager_secret" "runtime" {',
+                            ),
+                        }
+                        try:
+                            for name, content in variants.items():
+                                source.write_text(content)
+                                report = json.loads(
+                                    run(
+                                        module,
+                                        "exception-" + name,
+                                        TRIVY,
+                                        scan,
+                                        network="bridge",
+                                        expected=1,
+                                    )
+                                )
+                                ids = {
+                                    finding["ID"]
+                                    for item in report.get("Results", [])
+                                    for finding in item.get("Misconfigurations", [])
+                                }
+                                if not ids.intersection({"AVD-AWS-0132", "AWS-0132"}):
+                                    raise ValueError(
+                                        "Negative control must detect the intended SSE-S3 finding"
+                                    )
+                        finally:
+                            source.write_text(original)
                     if module == "ingress":
                         source = directory / module / "main.tf"
                         original = source.read_text()

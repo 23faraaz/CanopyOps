@@ -20,6 +20,9 @@
 !docker/cloud-api/
 !docker/cloud-api/Dockerfile
 !docker/cloud-api/storage.py
+!docker/cloud-common/
+!docker/cloud-common/*.py
+!docker/cloud-common/*.crt
 !scripts/
 !scripts/recovery/
 !scripts/recovery/ledger.py

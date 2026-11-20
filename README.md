@@ -1761,7 +1761,7 @@ References: [Dependabot cooldown and security-update behavior](https://docs.gith
 [Zizmor offline mode and audit limits](https://docs.zizmor.sh/usage/).
 
 Scheduled infrastructure drift detection, isolated Terraform state-recovery rehearsal
-and extension of the current network-only plan policy remain separate stages.
+remain separate stages. The application plan-policy source is now covered by the code-only milestone below.
 Deployment acceptance later requires live verification of network exposure, TLS,
 IAM restrictions and runtime monitoring; those checks cannot be claimed from linting.
 
@@ -1810,10 +1810,10 @@ From `infra/modules/network-security`:
 python3 ../../../scripts/module_checks.py --module network-security
 ```
 
-This module is not called by the root configuration yet. Public ALB ingress is
-covered by the following milestone. S3-prefix-list HTTPS egress for image layers,
-actual private endpoint resources and
-policies, and optional collector-only metrics access remain separate work. Keep
+The root now calls this module only when the opt-in application configuration is supplied. Public ALB ingress is
+covered by the following milestone. The private-connectivity source milestone below adds S3-prefix-list HTTPS
+egress and endpoint resources/policies. Root integration and optional
+collector-only metrics access remain separate work. Keep
 those flows explicit; do not introduce allow-all egress to make startup work.
 Review the root plan guard and narrowly scoped IAM before connecting/applying new
 resource types. No AWS changes or application connectivity claims accompany this
@@ -1844,6 +1844,151 @@ root, or `python3 ../../../scripts/module_checks.py --module network-security`
 from the module directory. These are source/mock checks without local variable
 files or AWS credentials, not live reachability tests.
 
-No AWS changes were applied. Next add explicit S3 managed-prefix-list HTTPS egress,
-then private endpoint resources/policies; retain the separate IAM/plan-guard review
-before root wiring and deployment.
+No AWS changes were applied. The following milestone adds endpoint source;
+retain the separate IAM/plan-guard review before root wiring and deployment.
+
+
+### Cloud application preparation (not deployed)
+
+The optional `application` input wires the modules in `infra/application.tf`.
+Its default is null; `activate_services=false` prepares services with zero tasks.
+Existing readings must be migrated before activation. No AWS changes were applied
+by this milestone. Route 53 and ACM are the chosen DNS/HTTPS services, but no domain
+is owned yet. An owned hostname and authoritative zone are required; Terraform
+requests the certificate and creates its DNS validation records. No purchase is automated.
+
+Implemented components:
+
+- Five private-DNS interface endpoints (ECR API/Docker, Logs, Secrets Manager,
+  SQS), an S3 gateway endpoint, scoped endpoint policies and S3-prefix-list egress.
+- Shared ECS cluster, separate component execution/task roles, encrypted logs,
+  empty runtime secret metadata, finite generator task and durable S3 outbox.
+- Bootstrap-owned runtime permission boundary and opt-in deployment-access
+  policies separating plan reads, deployment and teardown. Runtime `PassRole`
+  is restricted to the eight application roles and ECS tasks. Direct secret-value
+  reads/updates are denied. Some metadata/log-delivery APIs require wildcard
+  resources, constrained where supported; live permission verification is pending.
+- Cloud-only PostgreSQL `verify-full` using the public London RDS CA bundle,
+  Redis TLS/hostname verification and RBAC authentication. Local storage tooling
+  and `python -m canopy.api` startup are preserved.
+- Original generator events are conditionally persisted before SQS sends;
+  retries retain event IDs and conflicting content is rejected. Published receipts
+  prove queue acceptance, not database processing. Consumer deduplication remains
+  necessary. Existing sequence/restart and direct-storage conflict gaps remain.
+
+Provision restricted SQL users and Redis users outside Terraform, then populate
+matching secret versions without putting passwords in source/state. Empty Redis
+user IDs prepare metadata only; supply a restricted analytics user and disabled
+`default` user before creating the cache. Application deployers can exercise runtime
+permissions through deployed code; direct secret-read denial is not data isolation.
+
+The plan guard allowlists application resources and checks private networking,
+immutable image digests, role boundaries, encryption, DNS scope and replacement
+behavior. Computed policy/container documents are flagged for pinned-source review.
+Task definitions use create-before-destroy and retain previous revisions; ECR must
+also retain active/rollback digests. Protected OIDC workflows retain saved-plan
+integrity and serialized state operations. Real application input selection and
+live IAM verification remain gates; no authenticated application run was performed.
+
+The ALB log bucket has a maintainer-approved, resource-only Trivy AVD-AWS-0132
+exception until **19 December 2026**, because ALB logging supports SSE-S3 only.
+Removal, expiry and wrong-resource controls fail as intended. Other buckets and
+image vulnerability gates are unaffected; SQLite exceptions remain local-only.
+[AWS ALB requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html),
+[ECR endpoints](https://docs.aws.amazon.com/AmazonECR/latest/userguide/vpc-endpoints.html),
+[RDS TLS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html).
+
+Verification on 20 November 2026:
+
+| Check | Result |
+| --- | --- |
+| Plan/controller contracts | 21 passed |
+| Teardown fake-AWS and availability fake-HTTP contracts | 7 and 3 passed |
+| Queue, deployment-access, foundation and ECS-service mock contracts | 5, 4, 5 and 11 passed |
+| Root, foundation, connectivity and runtime-boundary contracts | 15 passed |
+| Checked Terraform targets: format, validation, TFLint, HIGH/CRITICAL scanning | Passed |
+| Copied bootstrap with backend disabled | Initialized and validated |
+| Connection and outbox failure contracts | 12 passed |
+| Changed Python format/lint; offline workflow security scan | Passed |
+| Three cloud images: builds, non-root/read-only-source probes, CA loading | Passed |
+| Trivy image scan | Zero HIGH/CRITICAL findings, no image exceptions |
+| Disposable API/PostgreSQL TLS fixture | Assets, health, private metrics, SQL permissions, replacement and graceful shutdown passed |
+| TLS negative controls | Wrong CA and hostname rejected |
+
+These are local/mock results, not GitHub CI, RDS or migration evidence. No existing
+volume was mounted by the disposable fixture. One parallel provider installation
+ran out of temporary space; the sequential retry passed. No user data was deleted.
+Image sizes: API 35,819,606; worker 51,892,920; analytics 37,393,553 bytes. Cached
+build/probe observations were 4.58, 3.09 and 2.51 seconds; these are not cold-build
+or transfer measurements and do not justify smaller Fargate capacity.
+
+Repeat source checks sequentially from the repository root:
+
+```bash
+python3 scripts/module_checks.py --module cloud-root
+python3 scripts/module_checks.py --module deployment-access
+python3 scripts/module_checks.py --module queue
+python3 -B scripts/tests/test_cloud_plan_policy.py
+python3 -B scripts/tests/test_cloud_teardown.py
+python3 -B scripts/tests/test_availability_probe.py
+python3 -B scripts/tests/test_cloud_connections.py
+python3 -B scripts/tests/test_cloud_outbox.py
+```
+
+Module checks use disposable public-source copies, disabled backends and fictional
+inputs; they do not initialize the checkout backend or authenticate to AWS.
+
+Before deployment: acquire the domain/zone, review bootstrap boundary/access IAM,
+verify engine availability and real deployment inputs, provision secret versions
+and SQL/Redis roles, and review the complete plan and cost window. London public
+prices checked 19 November estimate approximately **$7.60/day or $53/week** for
+three 0.5-vCPU/1-GiB tasks, ten endpoint-AZ attachments, ALB, Multi-AZ 20-GiB RDS,
+one Redis node and WAF/KMS/secrets allowances. Domain, tax, requests/transfer,
+logs, overlap, CPU credits and retained data/snapshots are additional. Use a
+12?24-hour rehearsal with contingency inside the $20?30 budget; refresh before
+applying. This is estimated, not observed spend.
+[AWS ECS pricing](https://aws.amazon.com/fargate/pricing/),
+[VPC](https://aws.amazon.com/privatelink/pricing/),
+[RDS](https://aws.amazon.com/rds/postgresql/pricing/),
+[ALB](https://aws.amazon.com/elasticloadbalancing/pricing/),
+[Redis](https://aws.amazon.com/elasticache/pricing/), [WAF](https://aws.amazon.com/waf/pricing/).
+
+Migration must use the current writer's persisted records, preserving event IDs,
+timestamps, stations and incident state. Private migration transport/tooling is
+still to be selected and tested. Rehearse dump/restore and validate counts,
+uniqueness, station coverage, latest state and duplicate handling. Fence all
+writers for final transfer and measure against the five-minute budget. Preserve
+SQLite and backups. The historical **28.14-second local cutover bound** is not an
+exact duration or AWS result. Reverse-export was rehearsed; full rollback
+activation remains untested and must transfer PostgreSQL writes accepted after
+cutover before reactivating the previous database.
+
+Later acceptance: verify live network/TLS/IAM restrictions, request and processing
+behavior through releases, failed-release rollback, RDS Multi-AZ failover, separate
+database restoration and isolated-backend state recovery. Never apply cloned state
+against the same resource IDs. Capture Prometheus/Grafana screenshots with test,
+query and time window: healthy API with stopped processing, stale readings,
+missing metrics and firing/resolved alerts with durable receipts. Keep secrets off
+screen. Cloud observability and scheduled drift notification remain unverified.
+
+After an owned HTTPS hostname is live, sample release availability separately
+from queue progress and freshness:
+
+```bash
+python3 scripts/probe_availability.py --url https://YOUR_OWNED_HOST/api/overview \
+  --duration 300 --interval 0.5 > /tmp/canopy-release-observations.jsonl
+```
+
+This uses no AWS authentication; finite observations cannot prove zero downtime.
+
+Teardown requires separate approved plans: first `pause_ingestion=true` while
+workers drain, stop producers and reconcile outbox IDs against PostgreSQL. Then
+set `activate_services=false` and `teardown_prepared=true` to stop services and
+remove ALB/RDS deletion protection; a final RDS snapshot remains mandatory. The
+controller checks stopped tasks, empty source/DLQ counts and a settled writer
+fence again before application. Approximate counts do not replace reconciliation.
+Its fixed destroy targets exclude the protected foundation, bootstrap and ECR;
+foundation deletion is rejected. Retained outbox/keys, logs, secret metadata,
+cluster/roles, revisions and snapshots need a separate cleanup/cost review.
+`prevent_destroy` is a Terraform safeguard, not protection against direct AWS
+operations. Complete application teardown and live recovery remain untested.

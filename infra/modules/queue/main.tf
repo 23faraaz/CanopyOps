@@ -33,10 +33,16 @@ resource "aws_sqs_queue_policy" "https_only" {
   queue_url = each.value.url
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Sid       = "DenyInsecureTransport", Effect = "Deny", Principal = "*"
       Action    = "sqs:*", Resource = each.value.arn
       Condition = { Bool = { "aws:SecureTransport" = "false" } }
-    }]
+      }], var.writes_paused && each.key == "readings" ? [{
+      Sid       = "FenceNewReadings"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = ["sqs:SendMessage"]
+      Resource  = each.value.arn
+    }] : [])
   })
 }

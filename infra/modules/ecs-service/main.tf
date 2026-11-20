@@ -16,6 +16,8 @@ resource "aws_cloudwatch_log_group" "this" {
   tags              = merge(local.tags, { Name = local.name })
 }
 resource "aws_ecs_task_definition" "this" {
+  skip_destroy = true
+  lifecycle { create_before_destroy = true }
   family                   = local.name
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]

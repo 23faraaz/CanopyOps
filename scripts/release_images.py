@@ -205,6 +205,7 @@ def build(args):
             source = ROOT / name
             if source.suffix not in {
                 ".py",
+                ".crt",
                 ".sql",
                 ".txt",
                 ".html",

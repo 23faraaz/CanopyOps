@@ -2081,3 +2081,48 @@ Certificate-stage local verification: ACM three, ingress five and root three moc
 contracts passed, with formatting, validation, lint and strict security checks.
 Copied bootstrap source initialized and validated with its backend disabled.
 Live ACM issuance has not been run or claimed.
+
+### Application IAM ownership correction
+
+Application workflow policies now read only the exact retained bootstrap
+certificate ARN; they cannot request, delete or retag certificates. Bootstrap
+passes its validated certificate output into the access module, so enabling
+application access also requires `create_application_certificate=true`.
+Deployment DNS changes are limited to the application and analytics A records in
+the supplied zone. Destroy permits only DELETE for those records. Neither identity
+can change validation CNAMEs, NS delegation or unrelated hostnames.
+
+Both mutation identities exclude cluster, runtime role/policy, runtime secret,
+log-key alias and retained generator-log deletion. Destroy still permits the
+reviewed disposable application/network/database teardown and final snapshot.
+These are checks of the proposed policies, not an inventory of every existing
+policy or a live AWS authorization test. Deployers can still exercise application
+permissions through code and manage application bucket/key policies; this is not
+isolation from all application data.
+
+The previous `application-access.tfplan` contains the superseded permissions and
+must not be applied. After merging this correction, generate a fresh plan in your
+authenticated session (the agent does not run it):
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan \
+  -var='create_application_dns_zone=true' \
+  -var='create_application_certificate=true' \
+  -var='enable_application_boundary=true' \
+  -var='enable_terraform_workflows=true' \
+  -var='enable_application_access=true' \
+  -var='application_dns={domain_name="canopyops.faraazmo.co.uk",hosted_zone_id="Z04944632GJ89SE2C3524"}' \
+  -out=application-access-tightened.tfplan
+```
+
+If the old application-access plan was never applied, expect 43 IAM additions
+(20 policies, 20 workflow attachments and three local read attachments), with
+no unrelated changes/deletions. This count is a source expectation, not a live
+plan result. Review policy contents and attachments again before applying.
+
+Correction verification: eight mocked deployment-access contracts passed,
+including deploy/destroy DNS ownership, retained-resource deletion exclusions,
+exact certificate reads, wrong-account/region rejection and IAM policy quotas.
+Formatting, provider validation, TFLint and strict HIGH/CRITICAL scanning passed;
+a copied bootstrap initialized/validated with its backend disabled. No AWS
+permission simulation, live plan or apply was performed by the agent.

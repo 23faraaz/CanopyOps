@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "release": {
-    "commit": "74155727c75bbfb05d65d8b9e6b7035db120c2d9",
-    "run_id": "44744564031",
+    "commit": "76ff11302260b325016c0c0ad8c6924e420f6dfb",
+    "run_id": "44812708111",
     "attempt": "1"
   },
   "inputs": {
@@ -41,9 +41,9 @@
         "analytics": "arn:aws:ecr:eu-west-2:667819981432:repository/canopyops-demo/analytics"
       },
       "image_uris": {
-        "api": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/api@sha256:2b1cfd893f233267b2f39b2b5376020a562ad61044fd26fb5c10c7d004b6fe48",
-        "worker": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/worker@sha256:d2f0472a3b65e00291ff6c04e19c9119985c7e422bb80a38e13bd29a5af5d11c",
-        "analytics": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/analytics@sha256:ed1a559228a6e4bb35a413cec340188c703b7c9f900b78de273d3a1f9b1e30e3"
+        "api": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/api@sha256:d72a108d1704cfc46e4bce02058c6f9ec1c8f6ac95855998b410c7bf862a4ef9",
+        "worker": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/worker@sha256:6291b3738a096cb6e2c6c1ce484919cf3667ffc2031ad65e3c86f022167b4d2e",
+        "analytics": "667819981432.dkr.ecr.eu-west-2.amazonaws.com/canopyops-demo/analytics@sha256:4475672289a80369cb26ec12fbd9a4eac57a10f5e3ced1987e928173f7e3ff0d"
       },
       "activate_services": false,
       "pause_ingestion": true,

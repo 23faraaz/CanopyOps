@@ -2397,3 +2397,35 @@ update all three digest pins and the release identity together through a focused
 PR, pass CI and generate a fresh protected Terraform plan. Keep services stopped,
 ingestion fenced and Redis deferred. Recheck scan freshness, account spend and the
 12?24-hour rehearsal/teardown window before a separate deployment approval.
+
+
+### Selected application release: 44812708111, attempt 1
+
+The public deployment inputs now select the three images shown in the retained
+ECR screenshots above, replacing release `44744564031`. On 21 November 2026,
+GitHub run metadata confirmed successful main-branch publishing from commit
+`76ff11302260b325016c0c0ad8c6924e420f6dfb`. The exact
+`immutable-release-44812708111-1` manifest was downloaded to temporary storage and
+verified with the existing strict deployment-input/receipt validator. Its SHA256 is
+`3f185eb499f7eb8081af83e9aadfe464b47e28ef811d6d48587bf1a7c614a258`.
+All three receipt digests and native-scan timestamps match the console screenshots;
+all scans were COMPLETE with zero HIGH/CRITICAL findings at publication.
+
+| Component | Selected digest |
+| --- | --- |
+| api | `sha256:d72a108d1704cfc46e4bce02058c6f9ec1c8f6ac95855998b410c7bf862a4ef9` |
+| worker | `sha256:6291b3738a096cb6e2c6c1ce484919cf3667ffc2031ad65e3c86f022167b4d2e` |
+| analytics | `sha256:4475672289a80369cb26ec12fbd9a4eac57a10f5e3ced1987e928173f7e3ff0d` |
+
+Only release identity and image digests changed in `infra/deployment.json`.
+PostgreSQL/Redis versions, network/DNS/certificate/boundary metadata, snapshot
+settings and control flags are unchanged: services remain stopped, ingestion
+fenced and Redis deferred. This is release selection, not ECS deployment or a
+new vulnerability scan. The manifest confirms publication-time findings; current
+AWS findings/account spend were not queried by the agent.
+
+After this PR passes CI and merges, generate a new protected Terraform plan for
+the resulting main commit. Earlier saved plans still contain the old release and
+must not be applied. Review the sanitized summary, current scan freshness, spend
+and rehearsal/teardown window before a separate deployment approval. No AWS
+resources, runtime secrets, database records or local volumes were accessed.

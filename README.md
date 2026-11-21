@@ -2363,3 +2363,37 @@ age before any deployment review. Provisioning is a separate approved step; this
 review does not authorize activation, migration, failover or deletion. When live
 monitoring is exercised later, capture Prometheus/Grafana screenshots of normal,
 stale-reading, stopped-processing and recovery states as portfolio evidence.
+
+
+### ECR scan screenshots: release 44812708111, attempt 1
+
+These original operator-captured console screenshots show the API, worker and
+analytics images under the same release tag in London (`eu-west-2`):
+
+```text
+build-76ff11302260b325016c0c0ad8c6924e420f6dfb-44812708111-1
+```
+
+Publishing [run 44812708111](https://github.com/23faraaz/CanopyOps/actions/runs/44812708111)
+completed successfully on `main`, source commit
+`76ff11302260b325016c0c0ad8c6924e420f6dfb`, attempt 1. Each screenshot includes the
+repository, tag, full digest, scan status, scan/source-update timestamps and counts.
+The files were copied without cropping or changing their pixels.
+
+| Component | Original screenshot | Scan completed (20 November 2026, UTC) | HIGH | CRITICAL |
+| --- | --- | --- | ---: | ---: |
+| API | [Image identity and scan](docs/evidence/ecr/44812708111-1/api-scan.png) | 21:36:39 | 0 | 0 |
+| Worker | [Image identity and scan](docs/evidence/ecr/44812708111-1/worker-scan.png) | 21:37:08 | 0 | 0 |
+| Analytics | [Image identity and scan](docs/evidence/ecr/44812708111-1/analytics-scan.png) | 21:36:42 | 0 | 0 |
+
+All three scans show `Complete`; medium, low and informational counts are also
+zero in these captures. This is point-in-time console evidence, not continuous
+coverage, a guarantee of no vulnerabilities, or proof of ECS deployment.
+
+**Release selection is a separate change.** At this evidence-only milestone,
+`infra/deployment.json` still pins publishing run `44744564031`, not this captured
+release. Before selecting the new images, verify the selected publishing manifest,
+update all three digest pins and the release identity together through a focused
+PR, pass CI and generate a fresh protected Terraform plan. Keep services stopped,
+ingestion fenced and Redis deferred. Recheck scan freshness, account spend and the
+12?24-hour rehearsal/teardown window before a separate deployment approval.

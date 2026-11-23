@@ -821,6 +821,18 @@ locals {
         }
       },
       {
+        # WAF authorizes referenced managed rule sets separately from the ACL.
+        # This permits using them in this ACL's create/update requests, not
+        # creating, publishing, tagging or deleting a managed rule set.
+        "Sid" : "ReferenceRegionalManagedRuleSets",
+        "Effect" : "Allow",
+        "Action" : ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"],
+        "Resource" : "arn:aws:wafv2:${var.aws_region}:${var.account_id}:regional/managedruleset/*/*",
+        "Condition" : {
+          "StringEquals" : { "aws:RequestedRegion" : var.aws_region }
+        }
+      },
+      {
         "Sid" : "ManageApplicationWaf",
         "Effect" : "Allow",
         "Action" : [

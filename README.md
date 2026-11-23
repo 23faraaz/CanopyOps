@@ -2554,12 +2554,16 @@ the plan identity receives no new writes. The mock tests enforce the default
 managed-policy size and ten-attachment limits.
 
 Credential-free module verification: Terraform format/validation succeeded and
-11 mocked tests passed. Offline Trivy embedded checks reported no HIGH/CRITICAL
+13 mocked tests passed. Offline Trivy embedded checks reported no HIGH/CRITICAL
 findings; this is static analysis, not verification of effective AWS permissions.
-The WAF source already allows creation and tagging of the intended regional ACL.
-No WAF grant was widened speculatively. Its live effective permissions, any
-boundary/organization restrictions and any referenced-resource authorization
-remain to be checked by the operator. AWS documents CreateWebACL and TagResource
+The operator-provided CloudTrail event at 15:27:07 UTC identified a separate
+WAF CreateWebACL denial on the account-local regional managedruleset/*/*
+resource. The prior simulation allowed the web ACL ARN only and did not test
+this referenced resource. A separate statement now permits CreateWebACL and
+UpdateWebACL against those regional managed-rule-set references. It grants no
+managed-rule-set mutation APIs; original tagged web ACL restrictions remain.
+The reference statement is absent from plan and destroy permissions.
+Live authorization and deployment success remain unverified. AWS documents CreateWebACL and TagResource
 as authorization actions for ACL creation:
 https://docs.aws.amazon.com/service-authorization/latest/reference/list_wafv2.html
 

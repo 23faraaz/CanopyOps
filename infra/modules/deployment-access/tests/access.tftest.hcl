@@ -266,3 +266,43 @@ run "base_network_destroy_has_no_creates" {
     error_message = "Network teardown must not grant creation or configuration expansion."
   }
 }
+
+run "waf_managed_rule_references_are_separate_and_bounded" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement : row
+      if row.Sid == "ReferenceRegionalManagedRuleSets" &&
+      toset(row.Action) == toset(["wafv2:CreateWebACL", "wafv2:UpdateWebACL"]) &&
+      row.Resource == "arn:aws:wafv2:eu-west-2:123456789012:regional/managedruleset/*/*" &&
+      row.Condition.StringEquals == { "aws:RequestedRegion" = "eu-west-2" }
+    ]) == 1
+    error_message = "WAF reference authorization must be limited to ACL create/update and account-local regional managed rule sets."
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement : row
+      if row.Sid == "CreateTaggedRegionalWaf" &&
+      row.Resource == "arn:aws:wafv2:eu-west-2:123456789012:regional/webacl/canopyops-demo-web/*" &&
+      row.Condition.StringEquals["aws:RequestTag/Project"] == "canopyops" &&
+      row.Condition.StringEquals["aws:RequestTag/Environment"] == "demo" &&
+      row.Condition.StringEquals["aws:RequestTag/ManagedBy"] == "Terraform"
+    ]) == 1
+    error_message = "Managed-rule references must not weaken the original tagged ACL creation permission."
+  }
+}
+run "destroy_cannot_reference_managed_rules_for_creation" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement :
+      !contains(row.Action, "wafv2:CreateWebACL") && !contains(row.Action, "wafv2:UpdateWebACL")
+    ])
+    error_message = "Destroy must not gain ACL creation/update or managed-rule reference authorization."
+  }
+}

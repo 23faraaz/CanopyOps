@@ -456,3 +456,47 @@ def test_application_destroy_metadata_accepts_the_full_preflight_contract():
         },
     )
     automation.verify_metadata(meta, COMMIT, "destroy", "123", "1", now=NOW)
+
+
+@pytest.mark.parametrize("phase", ["init", "apply"])
+def test_failure_identifies_terraform_phase_and_aws_operation_without_private_values(
+    tmp_path, monkeypatch, phase
+):
+    runner = automation.Runner(tmp_path / "job")
+    message = "Error: creating VPC: operation error EC2: CreateVpc, https response error StatusCode: 403, api error AccessDenied: User arn:aws:iam::123456789012:role/private-fixture is not authorized to perform: ec2:CreateVpc on resource private-fixture\n  with module.network.aws_vpc.this,\npassword=private-fixture session_token=private-fixture"
+    monkeypatch.setattr(
+        automation.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=1, stdout="private-fixture", stderr=message),
+    )
+    with pytest.raises(RuntimeError) as error:
+        runner.command(["docker", "run", automation.TERRAFORM, phase, "-input=false"])
+    text = str(error.value)
+    assert "terraform " + phase in text
+    assert "EC2/CreateVpc" in text and "ec2:CreateVpc" in text
+    assert "module.network.aws_vpc.this" in text
+    assert "private-fixture" not in text and "arn:" not in text
+    assert "password" not in text and "session_token" not in text
+
+
+def test_failure_details_reject_unrecognized_labels_and_never_dump_provider_prose():
+    output = "operation error PRIVATESECRET: CreateThing, other prose private-fixture; is not authorized to perform: unknown:CreateUser on private-fixture"
+    result = automation.safe_failure_details(["docker", "run", "other-image"], output)
+    assert result == {
+        "command": "docker",
+        "aws_operations": [],
+        "iam_actions": [],
+        "terraform_resources": [],
+    }
+    assert "private-fixture" not in json.dumps(result)
+
+
+def test_failure_details_are_bounded_and_do_not_infer_iam_actions():
+    output = "\n".join(
+        f"operation error S3: GetObject{i}, api error AccessDenied" for i in range(20)
+    )
+    result = automation.safe_failure_details(
+        ["docker", "run", automation.TERRAFORM, "init"], output
+    )
+    assert len(result["aws_operations"]) == 8
+    assert result["iam_actions"] == []

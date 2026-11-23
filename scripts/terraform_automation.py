@@ -282,6 +282,92 @@ def verify_metadata(meta, commit, mode, run_id, attempt, now=None, account=None)
         raise ValueError("Saved plan size exceeds the bounded demo policy")
 
 
+def safe_failure_details(arguments, output):
+    """Extract structured identifiers only. Never include provider prose or ARNs."""
+    command = Path(str(arguments[0])).name
+    if command == "docker" and TERRAFORM in arguments:
+        index = arguments.index(TERRAFORM) + 1
+        if index < len(arguments) and arguments[index] in {
+            "init",
+            "version",
+            "show",
+            "plan",
+            "apply",
+        }:
+            command = "terraform " + arguments[index]
+    services = {
+        "EC2",
+        "ECS",
+        "ECR",
+        "IAM",
+        "S3",
+        "SQS",
+        "RDS",
+        "KMS",
+        "WAFV2",
+        "ElastiCache",
+        "Secrets Manager",
+        "SecretsManager",
+        "CloudWatch Logs",
+        "CloudWatchLogs",
+        "Route 53",
+        "Route53",
+        "Elastic Load Balancing v2",
+        "ElasticLoadBalancingV2",
+        "ElasticLoadBalancing",
+    }
+    prefixes = {
+        "ec2",
+        "ecs",
+        "ecr",
+        "iam",
+        "s3",
+        "sqs",
+        "rds",
+        "kms",
+        "wafv2",
+        "elasticache",
+        "secretsmanager",
+        "logs",
+        "route53",
+        "elasticloadbalancing",
+    }
+    verbs = r"(?:Get|List|Head|Create|Delete|Put|Modify|Update|Describe|Register|Deregister|Associate|Disassociate|Attach|Detach|Add|Remove|Tag|Untag|Set|Enable|Disable|Start|Stop|Validate|Authorize|Revoke|Import|Request|Pass|Generate|Encrypt|Decrypt|Schedule|Cancel|Retire)[A-Za-z0-9]{0,70}"
+    operations = sorted(
+        {
+            service + "/" + operation
+            for service, operation in re.findall(
+                r"operation error ([A-Za-z][A-Za-z0-9 ]{0,40}): (" + verbs + r")(?=[,:\s]|$)",
+                output,
+            )
+            if service in services
+        }
+    )[:8]
+    actions = sorted(
+        {
+            service + ":" + action
+            for service, action in re.findall(
+                r"(?:perform[:\s]+|allows? (?:the )?)([a-z0-9-]+):(" + verbs + r")(?=[,;\s.]|$)",
+                output,
+            )
+            if service in prefixes
+        }
+    )[:8]
+    resources = []
+    for address in re.findall(r"\bwith ([^\s,]{1,250}),", output):
+        if re.fullmatch(
+            r'module\.(?:network|security|connectivity|foundation|database|cache|queue|ingress|service)(?:\["(?:demo|api|worker|analytics)"\])?\.aws_[a-z0-9_]+\.[a-z0-9_]+(?:\["[a-z0-9_.-]{1,60}"\]|\[[0-9]{1,3}\])?',
+            address,
+        ):
+            resources.append(address)
+    return {
+        "command": command,
+        "aws_operations": operations,
+        "iam_actions": actions,
+        "terraform_resources": sorted(set(resources))[:8],
+    }
+
+
 class Runner:
     def __init__(self, directory):
         self.directory = Path(directory).absolute()
@@ -315,8 +401,13 @@ class Runner:
             if "Error acquiring the state lock" in private_output:
                 raise RuntimeError("State lock acquisition failed; do not disable locking")
             suffix = " [" + code.group(1) + "]" if code else ""
+            details = safe_failure_details(arguments, private_output)
             raise RuntimeError(
-                "Automation command failed: " + Path(str(arguments[0])).name + suffix
+                "Automation command failed: "
+                + details["command"]
+                + suffix
+                + "; safe identifiers: "
+                + json.dumps({key: value for key, value in details.items() if key != "command"})
             )
         return value.stdout
 

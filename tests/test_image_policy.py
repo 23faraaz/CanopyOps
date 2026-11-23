@@ -96,3 +96,22 @@ def test_expired_approval_is_rejected_even_after_upgrade():
     policy["expires_at"] = "2026-11-16T14:00:00Z"
     with pytest.raises(ValueError):
         evaluate(dict(RUNTIME, sqlite_version="3.54.1"), policy, SCOPE, NOW)
+
+
+def test_manual_local_extension_remains_bounded_and_expires_at_the_exact_deadline():
+    import json
+    from datetime import timedelta
+
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / "security/sqlite-risk-acceptance.json").read_text()
+    )
+    start = datetime.fromisoformat(policy["approved_at"].replace("Z", "+00:00"))
+    expiry = datetime.fromisoformat(policy["expires_at"].replace("Z", "+00:00"))
+    assert expiry == datetime(2026, 11, 24, tzinfo=timezone.utc)
+    assert expiry - start <= timedelta(days=7)
+    assert set(policy["cves"]) == set(SQLITE_CVES)
+    assert "no AWS/production release authorization" in policy["conditions"][0]
+    before = evaluate(RUNTIME, policy, policy["scope"], expiry - timedelta(seconds=1))
+    assert before["accepted_cves"] == sorted(SQLITE_CVES)
+    with pytest.raises(ValueError, match="expired"):
+        evaluate(RUNTIME, policy, policy["scope"], expiry)

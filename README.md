@@ -2454,3 +2454,29 @@ created some resources: inspect a fresh plan instead of replaying the earlier
 saved plan or assuming nothing was provisioned. Keep tasks stopped, ingestion
 fenced and existing data/volumes intact. A new source commit also requires a new
 plan and protected approval before retry. Do not publish the private error file.
+
+
+### Manual local SQLite acceptance extension (23 November 2026)
+
+The owner explicitly requested a short extension after the existing acceptance
+expired. It now expires **24 November 2026 at 00:00 UTC**. The original approval
+start remains unchanged, so the total approved interval stays below seven days.
+This covers only CVE-2026-119373, CVE-2026-119374 and CVE-2026-119379 in the same
+hash-bound local synthetic-data image. An isolated no-network image probe and
+public-source hash comparison confirmed SQLite `3.53.4` / `sqlite-libs=3.53.4-r0`
+and unchanged accepted scope. No existing database or volume was mounted.
+
+SQLite remains vulnerable. [SQLite's advisory](https://www.sqlite.org/cves.html)
+identifies 3.54.0 as fixed. Application/schema, Dockerfile, dependency lock, base,
+Compose and SQLite package changes still invalidate this acceptance. The native
+HIGH/CRITICAL scan gate, scope checks, three-CVE limit, seven-day maximum and
+exact-expiry rejection remain enabled. Tests verify the real extension document
+accepts only its original scope before the deadline and fails at the deadline.
+This does not approve AWS/production images or introduce automatic renewal.
+
+Next replace the vulnerable local SQLite runtime with a verified patched build,
+retire the acceptance, and rerun the full gate. Separately, merge the safe Terraform
+diagnostic change once CI passes, create a fresh plan to account for any partial
+provisioning, and use the structured denied operation to scope an IAM correction.
+Do not replay the old apply or grant broad administrator permissions. PostgreSQL
+cloud images, their digest pins, existing readings and runtime secrets are unchanged.

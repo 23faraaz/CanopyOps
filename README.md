@@ -2538,3 +2538,34 @@ passed, including plan/deploy/destroy protections and the new scoped-read checks
 The isolated offline HIGH/CRITICAL Terraform security scan reported no blocking
 findings. These checks used copied public sources and fictional inputs only;
 the live six-policy IAM update and AWS permission verification remain operator-run.
+
+
+### Deployment network authorization repair (23 November 2026)
+
+The protected apply reported denied EC2/CreateVpc and WAFV2/CreateWebACL
+operations. The local demo role's network policy does not authorize the separate
+GitHub deployment role. The deployment-access module now has a dedicated
+`base_network` policy for VPCs, subnets, internet gateways and route tables.
+Creation requires Project/Environment/ManagedBy request tags; management requires
+matching resource tags in the configured account and region. Route writes are
+limited to public-tier route tables, and tag updates cannot change ownership.
+The destroy identity receives only the corresponding deletion/detachment actions;
+the plan identity receives no new writes. The mock tests enforce the default
+managed-policy size and ten-attachment limits.
+
+Credential-free module verification: Terraform format/validation succeeded and
+11 mocked tests passed. Offline Trivy embedded checks reported no HIGH/CRITICAL
+findings; this is static analysis, not verification of effective AWS permissions.
+The WAF source already allows creation and tagging of the intended regional ACL.
+No WAF grant was widened speculatively. Its live effective permissions, any
+boundary/organization restrictions and any referenced-resource authorization
+remain to be checked by the operator. AWS documents CreateWebACL and TagResource
+as authorization actions for ACL creation:
+https://docs.aws.amazon.com/service-authorization/latest/reference/list_wafv2.html
+
+No AWS calls, IAM apply or deployment retry were performed for this repair.
+After the reviewed bootstrap policy change is applied, generate a fresh protected
+application plan against the partially created resources. Do not reuse the failed
+saved apply or clear future taints without inspecting the affected resources.
+Application tasks must stay stopped and ingestion paused until migration checks
+pass. Existing resources can continue to incur charges during troubleshooting.

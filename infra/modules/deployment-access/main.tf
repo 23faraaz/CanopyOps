@@ -1,5 +1,6 @@
 locals {
   statements = {
+    "base_network" : local.base_network_statements,
     "read_infrastructure" : [
       {
         "Sid" : "GeneratorTaskInventory",
@@ -1127,6 +1128,8 @@ locals {
     ]
   }
   destroy_actions = [
+    "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteRouteTable", "ec2:DeleteInternetGateway",
+    "ec2:DetachInternetGateway", "ec2:DisassociateRouteTable", "ec2:DeleteRoute",
     "ec2:DeleteSecurityGroup", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:DeleteVpcEndpoints",
     "ecs:DeleteService",
     "rds:DeleteDBInstance", "rds:DeleteDBSubnetGroup", "rds:DeleteDBParameterGroup", "rds:CreateDBSnapshot", "rds:AddTagsToResource",

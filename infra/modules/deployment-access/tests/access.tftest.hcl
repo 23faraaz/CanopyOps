@@ -232,3 +232,37 @@ run "refresh_metadata_reads_remain_resource_scoped" {
     error_message = "Refresh reads must not add object data, credential values or cryptographic access."
   }
 }
+
+run "base_network_deploy_requires_ownership" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      row.Resource != "*" && row.Condition.StringEquals["aws:RequestedRegion"] == "eu-west-2" &&
+      (try(row.Condition.StringEquals["aws:RequestTag/Project"], "") == "canopyops" || try(row.Condition.StringEquals["aws:ResourceTag/Project"], "") == "canopyops")
+    ])
+    error_message = "Base networking must retain account/region resources and ownership conditions."
+  }
+  assert {
+    condition = anytrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      contains(row.Action, "ec2:CreateVpc") && row.Resource == "arn:aws:ec2:eu-west-2:123456789012:vpc/*"
+    ])
+    error_message = "Deployment must authorize tagged VPC creation."
+  }
+}
+run "base_network_destroy_has_no_creates" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      alltrue([for action in row.Action : !can(regex("^ec2:(Create|Modify|Attach|Replace|Associate)", action))])
+    ])
+    error_message = "Network teardown must not grant creation or configuration expansion."
+  }
+}

@@ -83,6 +83,64 @@ def redacted(value, mask):
     return value
 
 
+def retained_generator_cleanup(resource, resources, application, mode):
+    """Validate only deposed generator revisions retained by skip_destroy.
+
+    A current task definition must remain at the same address. This is not
+    permission to deregister a revision or delete an ordinary current object.
+    """
+    if mode != "apply" or resource["change"]["actions"] != ["delete"]:
+        return False
+    if resource["address"] != 'module.foundation["demo"].aws_ecs_task_definition.generator[0]':
+        return False
+    change = resource["change"]
+    before = change.get("before") or {}
+    account = (application or {}).get("permissions_boundary_arn", "").split(":")
+    if (
+        resource.get("type") != "aws_ecs_task_definition"
+        or not isinstance(resource.get("deposed"), str)
+        or not re.fullmatch(r"[a-f0-9]{8}", resource["deposed"])
+        or change.get("after") is not None
+        or before.get("skip_destroy") is not True
+        or len(account) != 6
+        or re.fullmatch(r"[0-9]{12}", account[4]) is None
+        or re.fullmatch(
+            "arn:aws:ecs:eu-west-2:"
+            + account[4]
+            + r":task-definition/canopyops-demo-generator:[1-9][0-9]*",
+            before.get("arn", ""),
+        )
+        is None
+    ):
+        raise ValueError("Unverified deposed generator revision cleanup")
+    current = [
+        item
+        for item in resources
+        if item["address"] == resource["address"] and not item.get("deposed")
+    ]
+    if len(current) != 1 or current[0]["change"]["actions"] not in [
+        ["no-op"],
+        ["create"],
+        ["update"],
+        ["create", "delete"],
+    ]:
+        raise ValueError("Retained revision cleanup requires a surviving current generator")
+    # Validate both identities/hardening with the ordinary strict task checks.
+    for item, values in [(resource, before), (current[0], current[0]["change"].get("after"))]:
+        candidate = {
+            **item,
+            "change": {
+                "actions": ["update"],
+                "after": values,
+                "after_unknown": {}
+                if item is resource
+                else item["change"].get("after_unknown", {}),
+            },
+        }
+        check_cloud_resource(candidate, application, "apply")
+    return True
+
+
 def review_plan(plan, mode, *, targeted_destroy=False):
     if (
         mode not in {"apply", "destroy"}
@@ -120,11 +178,24 @@ def review_plan(plan, mode, *, targeted_destroy=False):
             continue
         address = resource["address"]
         kind = resource["type"]
+        retained_cleanup = retained_generator_cleanup(
+            resource, plan.get("resource_changes", []), application, mode
+        )
         if address.startswith("module.network.") and kind in FIELDS:
             fields = FIELDS[kind]
         else:
             application = plan.get("variables", {}).get("application", {}).get("value")
-            fields = check_cloud_resource(resource, application, mode)
+            candidate = resource
+            if retained_cleanup:
+                candidate = {
+                    **resource,
+                    "change": {
+                        "actions": ["update"],
+                        "after": change["before"],
+                        "after_unknown": {},
+                    },
+                }
+            fields = check_cloud_resource(candidate, application, mode)
         fields = review_fields(kind, fields)
         allowed = (
             [["no-op"], ["create"], ["update"]] if mode == "apply" else [["no-op"], ["delete"]]
@@ -135,6 +206,8 @@ def review_plan(plan, mode, *, targeted_destroy=False):
             and not address.startswith("module.network.")
         ):
             allowed = [*allowed, ["create", "delete"]]
+        if retained_cleanup:
+            allowed = [*allowed, ["delete"]]
         if actions not in allowed:
             raise ValueError("Destructive/replacement apply or mixed destroy plan rejected")
         if actions == ["no-op"]:
@@ -147,6 +220,20 @@ def review_plan(plan, mode, *, targeted_destroy=False):
                 key for key in fields if isinstance(unknown, dict) and unknown.get(key)
             ],
         }
+        if retained_cleanup:
+            row["retained_deposed_revision"] = True
+        replacement_fields = sorted(
+            {
+                path[0]
+                for path in change.get("replace_paths", [])
+                if isinstance(path, list)
+                and path
+                and isinstance(path[0], str)
+                and path[0] in [*fields, *DOCUMENTS.get(kind, [])]
+            }
+        )
+        if replacement_fields:
+            row["replacement_fields"] = replacement_fields
         if not address.startswith("module.network."):
             row["computed_security_documents"] = [
                 key

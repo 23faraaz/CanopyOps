@@ -243,6 +243,76 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(rows[0]["actions"], ["create", "delete"])
         self.assertNotIn("container_definitions", rows[0]["after"])
 
+    def generator_cleanup_plan(self):
+        import json
+
+        entry, application = self.task()
+        image = application["image_uris"].pop("api").replace("/api@", "/worker@")
+        application["image_uris"]["worker"] = image
+        entry["address"] = 'module.foundation["demo"].aws_ecs_task_definition.generator[0]'
+        values = entry["change"]["after"]
+        values.update(family="canopyops-demo-generator", cpu="256", memory="512")
+        for key in ["execution_role_arn", "task_role_arn"]:
+            values[key] = values[key].replace("-api-", "-generator-")
+        container = json.loads(values["container_definitions"])[0]
+        container.update(
+            name="generator",
+            image=image,
+            command=["python", "-m", "ingestion.producer", "--cycles", "1"],
+        )
+        container["logConfiguration"]["options"]["awslogs-group"] = "/ecs/canopyops-demo-generator"
+        values["container_definitions"] = json.dumps([container])
+        old = copy.deepcopy(entry)
+        old["deposed"] = "deadbeef"
+        old["change"].update(actions=["delete"], after=None)
+        old["change"]["before"]["arn"] = (
+            "arn:aws:ecs:eu-west-2:123456789012:task-definition/canopyops-demo-generator:1"
+        )
+        entry["change"].update(
+            actions=["create", "delete"], replace_paths=[["container_definitions"]]
+        )
+        plan = self.plan(entry, application)
+        plan["resource_changes"].insert(0, old)
+        return plan
+
+    def test_deposed_retained_generator_cleanup_is_reviewable(self):
+        rows = self.controller.review_plan(self.generator_cleanup_plan(), "apply")
+        self.assertTrue(rows[0]["retained_deposed_revision"])
+        self.assertEqual(rows[0]["actions"], ["delete"])
+        self.assertEqual(rows[1]["replacement_fields"], ["container_definitions"])
+        self.assertNotIn("container_definitions", rows[0]["before"])
+
+    def test_generator_cleanup_rejects_missing_evidence(self):
+        for mutation in [
+            "not_deposed",
+            "invalid_marker",
+            "deregister",
+            "wrong_account",
+            "no_current",
+            "wrong_family",
+            "unsafe_current",
+        ]:
+            plan = self.generator_cleanup_plan()
+            old, current = plan["resource_changes"]
+            if mutation == "not_deposed":
+                old.pop("deposed")
+            elif mutation == "invalid_marker":
+                old["deposed"] = "unsafe-value"
+            elif mutation == "deregister":
+                old["change"]["before"]["skip_destroy"] = False
+            elif mutation == "wrong_account":
+                old["change"]["before"]["arn"] = old["change"]["before"]["arn"].replace(
+                    "123456789012", "999999999999"
+                )
+            elif mutation == "no_current":
+                plan["resource_changes"].pop()
+            elif mutation == "wrong_family":
+                old["change"]["before"]["family"] = "unrelated-project"
+            else:
+                current["change"]["after"]["skip_destroy"] = False
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.controller.review_plan(plan, "apply")
+
     def test_destroy_first_replacement_is_rejected(self):
         entry, application = self.task()
         entry["change"]["actions"] = ["delete", "create"]

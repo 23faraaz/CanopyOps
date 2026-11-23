@@ -2573,3 +2573,35 @@ application plan against the partially created resources. Do not reuse the faile
 saved apply or clear future taints without inspecting the affected resources.
 Application tasks must stay stopped and ingestion paused until migration checks
 pass. Existing resources can continue to incur charges during troubleshooting.
+
+
+### Retained generator revision recovery guard (23 November 2026)
+
+After a partial apply, the operator's filtered plan showed both a deletion and a
+create-before-destroy replacement for the generator task-definition address.
+The previous guard inspected the null `after` of a deletion and reported
+`Unsafe or unknown family`, hiding the operation that required review.
+
+A narrowly bounded recovery path now accepts a deletion only when the saved plan
+explicitly identifies a deposed generator revision, its prior task-definition ARN
+matches the demo account/region/family, `skip_destroy` is true, and a single valid
+current definition survives at the same address. Both definitions pass the usual
+task identity, image and container-hardening checks. Ordinary deletions, different
+resource types, missing evidence and unsafe current definitions remain blocked.
+The provider's `skip_destroy` setting retains the old AWS revision; this is not
+permission to deregister a task definition or delete application data. No manual
+state removal or untaint command is part of this recovery path.
+
+Sanitized summaries mark this retained deposed-revision operation and expose only
+allowlisted top-level replacement field names, never container contents. The
+operator's observed replacement path was `container_definitions`. Whether the live
+saved plan satisfies every recovery check remains unverified until a fresh
+protected plan runs after merge. Tasks remain stopped and ingestion fenced.
+
+Verification used fictional in-memory plans and an isolated, network-disabled
+Python container: 78 tests and 21 subtests passed; Ruff lint/format passed. No AWS
+calls or real state/saved-plan access were performed for this source change.
+
+References:
+- https://developer.hashicorp.com/terraform/internals/json-format
+- https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition

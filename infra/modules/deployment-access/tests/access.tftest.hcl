@@ -184,3 +184,51 @@ run "reject_certificate_from_another_region" {
   }
   expect_failures = [var.certificate_arn]
 }
+
+
+run "refresh_metadata_reads_remain_resource_scoped" {
+  command = plan
+  assert {
+    condition = alltrue([
+      for row in jsondecode(aws_iam_policy.this["read_bucket_metadata"].policy).Statement :
+      !contains(row.Action, "s3:GetBucketLogging") || (
+        row.Effect == "Allow" && toset(row.Resource) == toset([
+          "arn:aws:s3:::canopyops-demo-alb-logs-123456789012",
+          "arn:aws:s3:::canopyops-demo-outbox-123456789012"
+        ])
+      )
+      ]) && anytrue([
+      for row in jsondecode(aws_iam_policy.this["read_bucket_metadata"].policy).Statement : contains(row.Action, "s3:GetBucketLogging")
+    ])
+    error_message = "Bucket logging refresh must be permitted only on the two application buckets, never state or object resources."
+  }
+  assert {
+    condition = alltrue([
+      for row in jsondecode(aws_iam_policy.this["read_security"].policy).Statement :
+      !contains(row.Action, "kms:GetKeyRotationStatus") || (
+        row.Effect == "Allow" &&
+        row.Resource == "arn:aws:kms:eu-west-2:123456789012:key/*" &&
+        row.Condition.StringEquals == {
+          "aws:RequestedRegion"         = "eu-west-2"
+          "aws:ResourceTag/Project"     = "canopyops"
+          "aws:ResourceTag/Environment" = "demo"
+          "aws:ResourceTag/ManagedBy"   = "Terraform"
+          "aws:ResourceTag/Name"        = ["canopyops-demo-logs", "canopyops-demo-outbox"]
+        }
+      )
+      ]) && anytrue([
+      for row in jsondecode(aws_iam_policy.this["read_security"].policy).Statement : contains(row.Action, "kms:GetKeyRotationStatus")
+    ])
+    error_message = "Rotation-status refresh must retain account/region and all ownership/key-name conditions."
+  }
+  assert {
+    condition = alltrue([
+      for group in ["read_security", "read_bucket_metadata"] : alltrue([
+        for row in jsondecode(aws_iam_policy.this[group].policy).Statement : row.Effect == "Deny" || alltrue([
+          for action in row.Action : !contains(["s3:GetObject", "s3:GetObjectVersion", "kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "secretsmanager:GetSecretValue"], action)
+        ])
+      ])
+    ])
+    error_message = "Refresh reads must not add object data, credential values or cryptographic access."
+  }
+}

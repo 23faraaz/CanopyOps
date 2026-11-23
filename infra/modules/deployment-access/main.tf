@@ -143,6 +143,7 @@ locals {
         "Effect" : "Allow",
         "Action" : [
           "s3:GetBucketLocation",
+          "s3:GetBucketLogging",
           "s3:GetBucketPolicy",
           "s3:GetBucketPolicyStatus",
           "s3:GetBucketPublicAccessBlock",
@@ -199,6 +200,7 @@ locals {
         "Effect" : "Allow",
         "Action" : [
           "kms:DescribeKey",
+          "kms:GetKeyRotationStatus",
           "kms:GetKeyPolicy",
           "kms:ListResourceTags"
         ],

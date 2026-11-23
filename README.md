@@ -2480,3 +2480,61 @@ diagnostic change once CI passes, create a fresh plan to account for any partial
 provisioning, and use the structured denied operation to scope an IAM correction.
 Do not replay the old apply or grant broad administrator permissions. PostgreSQL
 cloud images, their digest pins, existing readings and runtime secrets are unchanged.
+
+
+### Terraform refresh read-permission repair (23 November 2026)
+
+After the safe diagnostics change, the operator supplied this failure from plan
+run `45187773631`: KMS/GetKeyRotationStatus (`kms:GetKeyRotationStatus`) for the
+foundation logs/outbox keys, and S3/GetBucketLogging (`s3:GetBucketLogging`) for
+the foundation ALB-log/outbox buckets. This identifies metadata refresh failures,
+not a Docker registry issue or Terraform syntax error. It does not prove that
+all possible policy layers would permit the operations after an IAM update.
+
+The deployment-access module lacked these actions in its shared read policies.
+Add only `s3:GetBucketLogging` to the existing two-bucket ARN allowlist, and
+`kms:GetKeyRotationStatus` to the existing owned-key metadata statement. KMS
+access retains its exact account/region key ARN pattern and Project, Environment,
+ManagedBy and the two key-name conditions. No writes, bucket/object contents,
+secret values, decryption, bootstrap state access or wildcard administrator grants
+are added. Shared reads apply to plan/deploy/destroy and the existing local read
+attachment; Terraform refresh needs them in each operation. Deploy's existing
+rotation-status read in its storage policy is left unchanged to minimize scope.
+
+[AWS KMS authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html)
+supports key/tag scoping for rotation status; [S3 authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_s3.html)
+scopes logging reads to bucket resources. New credential-free mock assertions
+require both actions, exact resource restrictions and absence of data/crypto grants.
+
+After merge, the operator must apply the bootstrap IAM repair using their own
+existing authenticated session; the agent does not read private inputs/state or
+use AWS profiles. With the existing bootstrap feature flags and inputs preserved:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap plan -input=false -out=refresh-read-repair.tfplan
+```
+
+Review before applying. The intended change is **six existing managed-policy
+updates**: read_bucket_metadata and read_security for plan, deploy and destroy.
+No resource creation/deletion, state-bucket changes, runtime-role changes or
+attachment changes are intended. If the plan differs, stop and inspect the
+sanitized resource/action summary; do not share the raw saved plan/state.
+Only after that review, the operator can run:
+
+```bash
+AWS_PROFILE=canopy-terraform terraform -chdir=infra/bootstrap apply refresh-read-repair.tfplan
+```
+
+Then generate a fresh protected application plan. A prior partial apply may have
+created resources, so review the remaining changes; never replay the old saved
+apply. Any persistent deny needs separate boundary/key/bucket/organization-policy
+investigation rather than broader grants. Tasks remain stopped, writes fenced,
+Redis deferred and original readings/volumes preserved. The repair is source-only
+until the operator confirms the IAM apply and a new live plan succeeds.
+
+Source verification for this repair: Terraform 1.17.2 formatting and validation
+passed with locked AWS provider 6.73.0. All nine deployment-access mock tests
+passed, including plan/deploy/destroy protections and the new scoped-read checks.
+The isolated offline HIGH/CRITICAL Terraform security scan reported no blocking
+findings. These checks used copied public sources and fictional inputs only;
+the live six-policy IAM update and AWS permission verification remain operator-run.

@@ -1,5 +1,6 @@
 locals {
   statements = {
+    "base_network" : local.base_network_statements,
     "read_infrastructure" : [
       {
         "Sid" : "GeneratorTaskInventory",
@@ -820,6 +821,18 @@ locals {
         }
       },
       {
+        # WAF authorizes referenced managed rule sets separately from the ACL.
+        # This permits using them in this ACL's create/update requests, not
+        # creating, publishing, tagging or deleting a managed rule set.
+        "Sid" : "ReferenceRegionalManagedRuleSets",
+        "Effect" : "Allow",
+        "Action" : ["wafv2:CreateWebACL", "wafv2:UpdateWebACL"],
+        "Resource" : "arn:aws:wafv2:${var.aws_region}:${var.account_id}:regional/managedruleset/*/*",
+        "Condition" : {
+          "StringEquals" : { "aws:RequestedRegion" : var.aws_region }
+        }
+      },
+      {
         "Sid" : "ManageApplicationWaf",
         "Effect" : "Allow",
         "Action" : [
@@ -1127,6 +1140,8 @@ locals {
     ]
   }
   destroy_actions = [
+    "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteRouteTable", "ec2:DeleteInternetGateway",
+    "ec2:DetachInternetGateway", "ec2:DisassociateRouteTable", "ec2:DeleteRoute",
     "ec2:DeleteSecurityGroup", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:DeleteVpcEndpoints",
     "ecs:DeleteService",
     "rds:DeleteDBInstance", "rds:DeleteDBSubnetGroup", "rds:DeleteDBParameterGroup", "rds:CreateDBSnapshot", "rds:AddTagsToResource",

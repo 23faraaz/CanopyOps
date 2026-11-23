@@ -232,3 +232,77 @@ run "refresh_metadata_reads_remain_resource_scoped" {
     error_message = "Refresh reads must not add object data, credential values or cryptographic access."
   }
 }
+
+run "base_network_deploy_requires_ownership" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      row.Resource != "*" && row.Condition.StringEquals["aws:RequestedRegion"] == "eu-west-2" &&
+      (try(row.Condition.StringEquals["aws:RequestTag/Project"], "") == "canopyops" || try(row.Condition.StringEquals["aws:ResourceTag/Project"], "") == "canopyops")
+    ])
+    error_message = "Base networking must retain account/region resources and ownership conditions."
+  }
+  assert {
+    condition = anytrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      contains(row.Action, "ec2:CreateVpc") && row.Resource == "arn:aws:ec2:eu-west-2:123456789012:vpc/*"
+    ])
+    error_message = "Deployment must authorize tagged VPC creation."
+  }
+}
+run "base_network_destroy_has_no_creates" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["base_network"].policy).Statement :
+      alltrue([for action in row.Action : !can(regex("^ec2:(Create|Modify|Attach|Replace|Associate)", action))])
+    ])
+    error_message = "Network teardown must not grant creation or configuration expansion."
+  }
+}
+
+run "waf_managed_rule_references_are_separate_and_bounded" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement : row
+      if row.Sid == "ReferenceRegionalManagedRuleSets" &&
+      toset(row.Action) == toset(["wafv2:CreateWebACL", "wafv2:UpdateWebACL"]) &&
+      row.Resource == "arn:aws:wafv2:eu-west-2:123456789012:regional/managedruleset/*/*" &&
+      row.Condition.StringEquals == { "aws:RequestedRegion" = "eu-west-2" }
+    ]) == 1
+    error_message = "WAF reference authorization must be limited to ACL create/update and account-local regional managed rule sets."
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement : row
+      if row.Sid == "CreateTaggedRegionalWaf" &&
+      row.Resource == "arn:aws:wafv2:eu-west-2:123456789012:regional/webacl/canopyops-demo-web/*" &&
+      row.Condition.StringEquals["aws:RequestTag/Project"] == "canopyops" &&
+      row.Condition.StringEquals["aws:RequestTag/Environment"] == "demo" &&
+      row.Condition.StringEquals["aws:RequestTag/ManagedBy"] == "Terraform"
+    ]) == 1
+    error_message = "Managed-rule references must not weaken the original tagged ACL creation permission."
+  }
+}
+run "destroy_cannot_reference_managed_rules_for_creation" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["edge"].policy).Statement :
+      !contains(row.Action, "wafv2:CreateWebACL") && !contains(row.Action, "wafv2:UpdateWebACL")
+    ])
+    error_message = "Destroy must not gain ACL creation/update or managed-rule reference authorization."
+  }
+}

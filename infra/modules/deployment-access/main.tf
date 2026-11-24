@@ -387,8 +387,6 @@ locals {
         "Effect" : "Allow",
         "Action" : [
           "ec2:DeleteSecurityGroup",
-          "ec2:AuthorizeSecurityGroupIngress",
-          "ec2:AuthorizeSecurityGroupEgress",
           "ec2:RevokeSecurityGroupIngress",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:ModifySecurityGroupRules",
@@ -408,6 +406,34 @@ locals {
             "aws:ResourceTag/Project" : var.project_name,
             "aws:ResourceTag/Environment" : var.environment,
             "aws:ResourceTag/ManagedBy" : "Terraform"
+          }
+        }
+      },
+      {
+        "Sid" : "AuthorizeRulesOnOwnedGroups",
+        "Effect" : "Allow",
+        "Action" : ["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"],
+        "Resource" : "arn:aws:ec2:${var.aws_region}:${var.account_id}:security-group/*",
+        "Condition" : {
+          "StringEquals" : {
+            "aws:RequestedRegion" : var.aws_region,
+            "aws:ResourceTag/Project" : var.project_name,
+            "aws:ResourceTag/Environment" : var.environment,
+            "aws:ResourceTag/ManagedBy" : "Terraform"
+          }
+        }
+      },
+      {
+        "Sid" : "CreateTaggedSecurityGroupRules",
+        "Effect" : "Allow",
+        "Action" : ["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"],
+        "Resource" : "arn:aws:ec2:${var.aws_region}:${var.account_id}:security-group-rule/*",
+        "Condition" : {
+          "StringEquals" : {
+            "aws:RequestedRegion" : var.aws_region,
+            "aws:RequestTag/Project" : var.project_name,
+            "aws:RequestTag/Environment" : var.environment,
+            "aws:RequestTag/ManagedBy" : "Terraform"
           }
         }
       },

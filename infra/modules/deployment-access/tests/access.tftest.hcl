@@ -306,3 +306,51 @@ run "destroy_cannot_reference_managed_rules_for_creation" {
     error_message = "Destroy must not gain ACL creation/update or managed-rule reference authorization."
   }
 }
+
+run "tagged_rule_creation_separates_parent_and_new_rule" {
+  command = plan
+  variables {
+    mode      = "deploy"
+    role_name = "canopyops-demo-terraform-deploy"
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["network"].policy).Statement : row
+      if row.Sid == "CreateTaggedSecurityGroupRules" &&
+      toset(row.Action) == toset(["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"]) &&
+      row.Resource == "arn:aws:ec2:eu-west-2:123456789012:security-group-rule/*" &&
+      row.Condition.StringEquals == {
+        "aws:RequestedRegion"        = "eu-west-2"
+        "aws:RequestTag/Project"     = "canopyops"
+        "aws:RequestTag/Environment" = "demo"
+        "aws:RequestTag/ManagedBy"   = "Terraform"
+      }
+    ]) == 1
+    error_message = "New security-group rules must use request-tag ownership conditions, not nonexistent resource tags."
+  }
+  assert {
+    condition = length([for row in jsondecode(aws_iam_policy.this["network"].policy).Statement : row
+      if row.Sid == "AuthorizeRulesOnOwnedGroups" &&
+      row.Resource == "arn:aws:ec2:eu-west-2:123456789012:security-group/*" &&
+      row.Condition.StringEquals == {
+        "aws:RequestedRegion"         = "eu-west-2"
+        "aws:ResourceTag/Project"     = "canopyops"
+        "aws:ResourceTag/Environment" = "demo"
+        "aws:ResourceTag/ManagedBy"   = "Terraform"
+      }
+    ]) == 1
+    error_message = "The parent security group must retain existing ownership-tag conditions."
+  }
+}
+run "destroy_cannot_add_security_group_rules" {
+  command = plan
+  variables {
+    mode      = "destroy"
+    role_name = "canopyops-demo-terraform-destroy"
+  }
+  assert {
+    condition = alltrue([for row in jsondecode(aws_iam_policy.this["network"].policy).Statement :
+      !contains(row.Action, "ec2:AuthorizeSecurityGroupIngress") && !contains(row.Action, "ec2:AuthorizeSecurityGroupEgress")
+    ])
+    error_message = "Destroy must not gain new rule creation privileges."
+  }
+}

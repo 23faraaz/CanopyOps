@@ -4,9 +4,9 @@
     "CVE-2026-119374",
     "CVE-2026-119379"
   ],
-  "approved_by": "23faraaz (project owner; explicit manual extension requested 23 November 2026, unchanged local synthetic-data scope)",
-  "approved_at": "2026-11-17T13:54:53.022911+00:00",
-  "expires_at": "2026-11-24T00:00:00Z",
+  "approved_by": "23faraaz (project owner; explicit manual longer-period renewal requested 24 November 2026; unchanged local synthetic-data scope)",
+  "approved_at": "2026-11-24T20:29:25Z",
+  "expires_at": "2026-12-01T20:29:25Z",
   "scope": {
     "base_image": "python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89",
     "architecture": "x86_64",
@@ -18,12 +18,20 @@
     "sqlite_package": "sqlite-libs=3.53.4-r0",
     "sqlite_version": "3.53.4"
   },
-  "rationale": "Temporary local synthetic-data project acceptance: FTS5 and session features are compiled in, but the unchanged application exposes no FTS/MATCH, changeset processing, arbitrary SQL or database uploads. SQLite 3.53.4 remains vulnerable; upstream identifies 3.54.0 as fixed. On 23 November the owner explicitly requested extension of the expired local acceptance. Extend only to 24 November 2026 at 00:00 UTC, retaining the original approval start, all bound build inputs and AWS/production exclusion. This is a short bridge while the patched local image is prepared, not a remediation claim.",
+  "rationale": "Manual seven-day local synthetic-data renewal explicitly requested by the project owner on 24 November 2026 after expiry. The prior approval dates are retained in renewal_history; this is a new review, not automatic renewal or a widening of the seven-day gate. A read-only, network-isolated runtime probe and public source hashes confirm the exact previously accepted image/package/application scope. SQLite 3.53.4 remains vulnerable: FTS5 and session are compiled in, but the unchanged app exposes no FTS/MATCH, changeset processing, arbitrary SQL or database uploads. Upstream SQLite 3.54.0 fixes these CVEs and Alpine edge offers 3.54.1; do not mix edge into the stable runtime. Prepare and verify a compatible patched local image before expiry. No AWS or production authorization.",
   "conditions": [
     "Local synthetic-data project only; no AWS/production release authorization",
     "Keep non-root, read-only root filesystem, dropped capabilities and no-new-privileges",
     "No database uploads, arbitrary SQL, FTS tables, changeset processing or untrusted database imports",
     "Any application code/schema, base, Dockerfile, runtime lock or SQLite package change invalidates acceptance",
     "Recheck vendor fixes before expiry; fail closed at expiry; no automatic renewal"
+  ],
+  "renewal_history": [
+    {
+      "approved_by": "23faraaz (project owner; explicit manual extension requested 23 November 2026, unchanged local synthetic-data scope)",
+      "approved_at": "2026-11-17T13:54:53.022911+00:00",
+      "expires_at": "2026-11-24T00:00:00Z",
+      "rationale": "Temporary local synthetic-data project acceptance: FTS5 and session features are compiled in, but the unchanged application exposes no FTS/MATCH, changeset processing, arbitrary SQL or database uploads. SQLite 3.53.4 remains vulnerable; upstream identifies 3.54.0 as fixed. On 23 November the owner explicitly requested extension of the expired local acceptance. Extend only to 24 November 2026 at 00:00 UTC, retaining the original approval start, all bound build inputs and AWS/production exclusion. This is a short bridge while the patched local image is prepared, not a remediation claim."
+    }
   ]
 }

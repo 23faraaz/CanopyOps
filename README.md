@@ -2605,3 +2605,38 @@ calls or real state/saved-plan access were performed for this source change.
 References:
 - https://developer.hashicorp.com/terraform/internals/json-format
 - https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition
+
+
+### Queue emulator package-pin repair (24 November 2026)
+
+The local queue image pinned Alpine 3.22 OpenSSL `3.5.9-r0`, superseded in the
+repository by `3.5.9-r1`. Update only libcrypto3/libssl3 to r1; retain the base
+image digest, exact musl/zlib pins and runtime user. An isolated public-file
+`docker build` and Hadolint passed. The repaired image served ListQueues with
+HTTP 200 as UID/GID 10001 on a read-only filesystem with capabilities dropped.
+SIGTERM stop returned 143; this is not recorded as a zero-exit shutdown test.
+Trivy's HIGH/CRITICAL gate passed with zero findings for this queue image.
+Full CI remains separate; the expired local SQLite acceptance was not renewed.
+Alpine package source: https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/
+
+
+### Manual local SQLite renewal (24 November 2026)
+
+The owner explicitly requested a longer temporary period after the previous
+local-only approval expired. A fresh seven-day approval starts 24 November 2026
+at 20:29:25 UTC and expires **1 December 2026 at 20:29:25 UTC**. The prior dates
+and rationale remain in the acceptance file's renewal history. The gate still
+rejects approvals longer than seven days, expiry, scope changes and other CVEs;
+no automatic renewal or AWS/production permission has been added.
+
+A network-disabled, read-only container probe confirmed SQLite 3.53.4,
+`sqlite-libs=3.53.4-r0`, and enabled FTS5/session features. All accepted public
+build hashes and the image/application source hash match the prior scope exactly.
+The same three CVEs remain accepted only for the local synthetic-data runtime.
+SQLite remains vulnerable; this renewal is not a security fix. Upstream identifies
+3.54.0 as fixed and Alpine edge provides 3.54.1; prepare a compatible stable-runtime
+patch rather than mixing repositories. Recheck fixes and retire this acceptance
+before the new deadline. PostgreSQL-only cloud images receive no exception.
+
+Renewal verification: 18 isolated image-policy tests passed; Ruff lint and format
+passed. Full image scanning and GitHub CI remain separate verification steps.

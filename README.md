@@ -2380,23 +2380,23 @@ completed successfully on `main`, source commit
 repository, tag, full digest, scan status, scan/source-update timestamps and counts.
 The files were copied without cropping or changing their pixels.
 
-| Component | Original screenshot | Scan completed (20 November 2026, UTC) | HIGH | CRITICAL |
+| Component | Original screenshot | Scan completed (24 November 2026, UTC) | HIGH | CRITICAL |
 | --- | --- | --- | ---: | ---: |
-| API | [Image identity and scan](docs/evidence/ecr/44812708111-1/api-scan.png) | 21:36:39 | 0 | 0 |
-| Worker | [Image identity and scan](docs/evidence/ecr/44812708111-1/worker-scan.png) | 21:37:08 | 0 | 0 |
-| Analytics | [Image identity and scan](docs/evidence/ecr/44812708111-1/analytics-scan.png) | 21:36:42 | 0 | 0 |
+| API | [Image identity and scan](docs/evidence/ecr/44812708111-1/api-scan.png) | 20:14:47 | 0 | 0 |
+| Worker | [Image identity and scan](docs/evidence/ecr/44812708111-1/worker-scan.png) | 20:15:11 | 0 | 0 |
+| Analytics | [Image identity and scan](docs/evidence/ecr/44812708111-1/analytics-scan.png) | 20:14:21 | 0 | 0 |
 
 All three scans show `Complete`; medium, low and informational counts are also
 zero in these captures. This is point-in-time console evidence, not continuous
 coverage, a guarantee of no vulnerabilities, or proof of ECS deployment.
 
-**Release selection is a separate change.** At this evidence-only milestone,
-`infra/deployment.json` still pins publishing run `44744564031`, not this captured
-release. Before selecting the new images, verify the selected publishing manifest,
-update all three digest pins and the release identity together through a focused
-PR, pass CI and generate a fresh protected Terraform plan. Keep services stopped,
-ingestion fenced and Redis deferred. Recheck scan freshness, account spend and the
-12?24-hour rehearsal/teardown window before a separate deployment approval.
+These captures replace the earlier 20 November screenshots; the image digests
+and publishing release are unchanged. The selected deployment inputs already pin
+this release. This evidence refresh changes no application or Terraform inputs.
+Keep services stopped, ingestion fenced and Redis deferred until migration checks
+pass. Review a current protected plan and account spend before deployment, and
+complete the separately approved teardown within two hours of provisioning
+starting. Retained resources and recovery artifacts may continue to incur costs.
 
 
 ### Selected application release: 44812708111, attempt 1

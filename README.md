@@ -2640,3 +2640,23 @@ before the new deadline. PostgreSQL-only cloud images receive no exception.
 
 Renewal verification: 18 isolated image-policy tests passed; Ruff lint and format
 passed. Full image scanning and GitHub CI remain separate verification steps.
+
+
+### Tagged security-group rule authorization (24 November 2026)
+
+The protected apply failed at EC2 AuthorizeSecurityGroupIngress/Egress. Its safe
+summary identifies the operations but not the AWS error code/reason. Source review
+found the policy applied existing resource-tag conditions to newly created rule
+resources. AWS documents resource-tag conditions for the parent security group
+and request-tag conditions for new rules. Separate those statements, retaining
+account/region and Project/Environment/ManagedBy ownership on both sides. No
+network rules or exposed ports change; destroy gains no rule-creation actions.
+
+Formatting/validation and 15 mocked module tests passed, including IAM policy
+size/attachment limits and both parent/new-rule scopes. Offline embedded Trivy
+checks reported no HIGH/CRITICAL findings; no real AWS authorization was tested.
+CloudTrail confirmation and the reviewed bootstrap IAM apply remain pending.
+The deployment job began at 21:00:59 UTC: use 23:00 UTC as the conservative
+teardown completion deadline; a failure or retry must not reset the two-hour
+window. Preserve source readings and retained foundation/recovery resources.
+Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html

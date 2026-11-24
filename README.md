@@ -2605,3 +2605,16 @@ calls or real state/saved-plan access were performed for this source change.
 References:
 - https://developer.hashicorp.com/terraform/internals/json-format
 - https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/ecs_task_definition
+
+
+### Queue emulator package-pin repair (24 November 2026)
+
+The local queue image pinned Alpine 3.22 OpenSSL `3.5.9-r0`, superseded in the
+repository by `3.5.9-r1`. Update only libcrypto3/libssl3 to r1; retain the base
+image digest, exact musl/zlib pins and runtime user. An isolated public-file
+`docker build` and Hadolint passed. The repaired image served ListQueues with
+HTTP 200 as UID/GID 10001 on a read-only filesystem with capabilities dropped.
+SIGTERM stop returned 143; this is not recorded as a zero-exit shutdown test.
+Trivy's HIGH/CRITICAL gate passed with zero findings for this queue image.
+Full CI remains separate; the expired local SQLite acceptance was not renewed.
+Alpine package source: https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/

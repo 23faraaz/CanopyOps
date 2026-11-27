@@ -2683,3 +2683,28 @@ Minimum versions trade exact OS package reproducibility for continued access to
 stable security fixes. Revalidate fresh builds/scans, record resolved versions,
 and use immutable built-image digests rather than rebuilding to reproduce a
 release. Source: https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/libcrypto3
+
+### Redis OpenSSL remediation (27 November 2026)
+
+The supplied CI report identified CVE-2026-124709 in libcrypto3/libssl3
+3.5.9-r0 in the pinned Redis image, with 3.5.9-r2 reported as fixed. Pulling the
+current official 7.2.17-alpine tag still returned that vulnerable digest. A thin
+local monitoring/redis image retains Redis 7.2.17 and the pinned upstream base,
+then installs OpenSSL >=3.5.9-r2 from its existing Alpine 3.22 branch. Compose and
+the CI build/scan now use canopyops-redis:local together. The queue's minimum
+OpenSSL version also rises to r2. No cloud image, Redis persistence setting or
+vulnerability exception changes.
+
+The clean Redis build and Hadolint passed. Runtime inspection confirmed Redis
+7.2.17 and both OpenSSL packages at 3.5.9-r2. Non-root/read-only PING, SET/GET,
+expiry and SIGTERM exit 0 passed with synthetic data, no published ports and no
+real data mounts. Strict Trivy HIGH/CRITICAL scanning exited 0 with zero findings.
+The scan used a newly created disposable Docker volume because WSL temporary
+storage was nearly full; only that exact test volume was removed afterward.
+Existing volumes, live services and database data were untouched. Full GitHub CI
+is separate from these isolated checks; currently running local Redis containers
+are not automatically replaced by this source change.
+
+Changed CI script syntax/Ruff checks passed. The cache Compose overlay validated
+against a fictional base service and an explicit empty environment file; the real
+Compose inputs and credentials were not loaded.

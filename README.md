@@ -2,6 +2,65 @@
 
 A local cloud/DevOps learning project using persisted synthetic monitoring readings. No physical sensors, uploads, production users or production availability claims. The current code still defines four woodland stations; greenhouse naming is a recorded application gap.
 
+## Cost?availability decision: portfolio demo (27 November 2026)
+
+**Decision:** defer further paid AWS deployment and retain the verified local
+application as the working baseline. The full cloud design was implemented in
+Terraform, but completing its paid rehearsal was not justified for the current
+portfolio budget and scope. This is a documented cost?availability trade-off,
+not a completed AWS deployment or demonstrated cost saving.
+
+The 24 November apply reached AWS and partially created resources before AWS
+returned `FreeTierRestrictionError` for RDS creation and an ALB attribute change.
+That was an account-plan feature restriction, not a repository policy, a budget
+limit being reached, or proof that the architecture could not work. The exact
+rejected ALB attribute was not established. End-to-end cloud operation cannot be
+claimed without a successful deployment and runtime verification.
+
+| Evidence level | What this project demonstrates |
+| --- | --- |
+| Verified in the recorded exercises | Local application/container behaviour, persisted-reading migration rehearsals, CI checks, GitHub OIDC image publishing/ECR scans, and the earlier network-only deploy/destroy workflow rehearsal. Refer to the dated evidence below for each result. |
+| Implemented and checked in source | Modular Terraform, scoped IAM, private networking/endpoints, HTTPS routing, PostgreSQL/Redis/SQS integration design and protected plan/deploy/destroy controls. Static/mock checks do not prove live authorization or service behaviour. |
+| Still unverified | Complete ECS application operation, local-to-RDS cutover, full live rollback activation, RDS Multi-AZ failover and measured zero-downtime releases. |
+
+### Alternatives and availability limits
+
+A future lower-cost baseline would use private **Single-AZ RDS PostgreSQL**, while
+retaining the two-AZ VPC/subnet layout and ALB. This alternative is proposed, not
+implemented or measured. An ALB requires subnets in at least two AZs, and the RDS
+subnet group spans at least two AZs even for a Single-AZ database. Encryption,
+TLS, backups, least-privilege access and durable reading preservation would remain
+requirements. Single-AZ RDS has no cross-AZ standby failover, so it would not
+support a database high-availability claim. Multi-AZ could be enabled later for a
+separately budgeted, time-boxed failover exercise with recorded outcomes.
+
+The existing London model, priced on 20 November, estimates approximately
+**$0.21/hour with tasks stopped and Redis deferred**, or $0.43 over two hours,
+before tax, variable usage and retained-resource charges. Running three services
+and Redis increases the model to approximately $0.32/hour. Continuous operation
+is materially more expensive than a short rehearsal. The main baseline drivers
+are private interface endpoints, ALB/WAF and RDS; changing only RDS to Single-AZ
+would make a modest difference to a two-hour run. No cheaper cloud deployment was
+measured, so no savings percentage or actual optimisation result is claimed.
+
+The last account-wide usage check on 24 November was approximately **$2 before
+credits**, with a net total near zero. This is neither the final CanopyOps cost nor
+proof of zero usage. Credits offset eligible charges; they do not remove resource
+cost or justify leaving unused infrastructure running.
+
+**Cleanup remains unconfirmed.** Earlier successful network teardown does not
+prove cleanup after the later partial application applies. The 24 November
+23:00 UTC rehearsal deadline has passed; there is no evidence here that it was
+met. Inventory remaining resources, complete reviewed cleanup while preserving
+readings/recovery data, and reconcile actual billing before calling the rehearsal
+closed. Retained state, ECR, DNS, keys, secrets and backups need their own ongoing
+cost/retention review. This documentation change does not destroy resources or
+change Terraform inputs.
+
+References: [AWS account plans](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html),
+[ALB subnet requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html),
+[RDS VPC requirements](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html).
+
 ## Current implemented system
 
 - FastAPI dashboard/API: `python -m canopy.api`, laptop http://127.0.0.1:8001.
@@ -9,8 +68,8 @@ A local cloud/DevOps learning project using persisted synthetic monitoring readi
 - SQLite remains supported with `BACKEND=local` and `DATABASE_PATH`. `BACKEND=postgres` uses the PostgreSQL adapter.
 - A separate `docker/cloud-api/Dockerfile` builds a PostgreSQL-only API serving image. The root Dockerfile retains SQLite and migration/recovery tooling for local use; the running local stack is unchanged.
 - The local generator writes directly to the configured store. Prometheus scrapes private API metrics and Grafana presents a loopback-only, read-only viewer at http://127.0.0.1:3000.
-- A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; AWS SQS is not deployed or end-to-end verified.
-- GitHub OIDC image publishing, native ECR scan gating and separate Terraform plan, approved deploy and manual destroy workflows are implemented and verified below. AWS retains protected state storage, scoped CI roles and three encrypted immutable ECR repositories. The demo network was created and removed in a reviewed workflow rehearsal. No ECS/RDS application is deployed; RDS PostgreSQL replaces the earlier DynamoDB plan and Multi-AZ remains future work.
+- A separate PostgreSQL/SQS ingestion image now includes hash-locked Boto3 and a verified local queue adapter. The API image remains free of Boto3. Local emulator evidence is documented below; end-to-end AWS ingestion remains unverified, and partial cloud resources require inventory.
+- GitHub OIDC image publishing, native ECR scan gating and separate Terraform plan, approved deploy and manual destroy workflows are implemented and verified below. AWS retains protected state storage, scoped CI roles and three encrypted immutable ECR repositories. An earlier network-only deploy/destroy rehearsal passed. Later application applies were partial; current cleanup is unconfirmed and no complete ECS/RDS application operation is claimed. RDS PostgreSQL replaces the earlier DynamoDB plan; Multi-AZ failover remains untested.
 
 ## Repository layout
 
@@ -41,7 +100,7 @@ infra/                    # Demo backend, rehearsed network module and future sc
   registry/               # Applied encrypted immutable ECR repositories and retention
 ```
 
-Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap. The parent infra configuration calls a network module whose creation and teardown were exercised in AWS using the demo role. The network is now torn down; bootstrap remains. ECR now has implementation and mock tests in a separate registry root; other service modules remain learning scaffolds.
+Build contexts remain the repository root, with an explicit `.dockerignore` allowlist. Dockerfiles copy selected `app/` sources into the same in-container package paths, so the API still starts with `python -m canopy.api`. Compose commands and ports are unchanged. Database files/volumes, external password files, `.env`, virtual environments and retained backup evidence were not moved into the source tree. Terraform bootstrap source is under infra/bootstrap. The parent infra configuration calls a network module whose creation and teardown were exercised in AWS using the demo role. That earlier network-only teardown is recorded below; later partial application applies require a fresh resource inventory. ECR has a separate registry root, and the supporting application modules are implemented and checked in source. A complete working AWS application has not been verified.
 
 ## PostgreSQL-only API image and resource comparison
 

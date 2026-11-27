@@ -2660,3 +2660,26 @@ The deployment job began at 21:00:59 UTC: use 23:00 UTC as the conservative
 teardown completion deadline; a failure or retry must not reset the two-hour
 window. Preserve source readings and retained foundation/recovery resources.
 Reference: https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html
+
+
+### Queue OS package minimums (27 November 2026)
+
+A clean queue-image build reproduced the failure of the exact OpenSSL 3.5.9-r1
+pins: Alpine 3.22 now provides 3.5.9-r2. The local queue recipe retains its pinned
+base digest and stable repository branch, but requires minimum patched versions
+for libcrypto3/libssl3 (3.5.9-r1), musl/musl-utils (1.2.5-r13) and zlib (1.4-r0).
+This admits newer stable fixes instead of depending on removed package revisions.
+Python dependency locks, other Dockerfiles and SQLite acceptance scope do not change.
+
+A no-cache build and Hadolint passed. Resolved packages were OpenSSL 3.5.9-r2,
+musl/musl-utils 1.2.5-r13 and zlib 1.4-r0. ListQueues returned HTTP 200 as UID/GID
+10001 with a read-only filesystem and dropped capabilities; SIGTERM returned 143.
+The local Trivy database preparation reported insufficient disk space before a
+report was produced, so no fresh vulnerability-scan pass is claimed. The strict
+CI scan remains enabled. Only this check's temporary scan cache/archive was
+removed; no user Docker images, databases or project data were pruned.
+
+Minimum versions trade exact OS package reproducibility for continued access to
+stable security fixes. Revalidate fresh builds/scans, record resolved versions,
+and use immutable built-image digests rather than rebuilding to reproduce a
+release. Source: https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/libcrypto3

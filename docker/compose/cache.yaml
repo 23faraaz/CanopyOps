@@ -5,7 +5,9 @@ services:
       REDIS_HOST: redis
       CACHE_TTL_SECONDS: "10"
   redis:
-    image: redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335
+    image: canopyops-redis:local
+    build:
+      context: ./monitoring/redis
     profiles: [analytics]
     user: "10001:10001"
     command: [redis-server, --bind, 0.0.0.0, --protected-mode, "no", --save, "", --appendonly, "no", --dir, /tmp, --maxmemory, 16mb, --maxmemory-policy, allkeys-lru]

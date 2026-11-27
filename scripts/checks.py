@@ -16,6 +16,7 @@ from image_policy import RUNTIME_PROBE, evaluate, scope
 
 HADOLINT = "hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d"
 ACTIONLINT = "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
+REDIS_IMAGE = "canopyops-redis:local"
 TRIVY = (
     "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 )
@@ -228,9 +229,15 @@ def configuration_checks():
     )
     run(
         "docker",
-        "pull",
-        "redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335",
+        "run",
+        "--rm",
+        "--mount",
+        f"type=bind,source={ROOT / 'monitoring/redis/Dockerfile'},target=/Dockerfile,readonly",
+        HADOLINT,
+        "hadolint",
+        "/Dockerfile",
     )
+    run("docker", "build", "-t", REDIS_IMAGE, str(ROOT / "monitoring/redis"))
     prometheus = re.search(
         r"image: (prom/prometheus:\S+)", (ROOT / "compose.yaml").read_text()
     ).group(1)
@@ -424,10 +431,7 @@ def scan_checks():
             ("canopyops-ingestion:local", "ingestion_scan"),
             ("canopyops-queue:local", "queue_emulator_scan"),
             ("canopyops-analytics:local", "analytics_scan"),
-            (
-                "redis@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335",
-                "redis_scan",
-            ),
+            (REDIS_IMAGE, "redis_scan"),
         ]:
             run("docker", "save", "-o", str(archive), image)
             extra_scan = run(
